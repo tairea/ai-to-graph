@@ -1,6 +1,7 @@
 import ForceGraph3D from '3d-force-graph';
 import * as THREE from 'three';
 import { getAvatar } from './avatar.js';
+import { getUserName } from './user.js';
 
 const fontReady = document.fonts.ready;
 
@@ -16,6 +17,9 @@ let branchCounters = {};
 let nextBranchCharCode = 65;
 let meHoverCb = null;
 let nodeRightClickCb = null;
+let backgroundClickCb = null;
+let focusChangeCb = null;
+let focusedNodeId = 'me';
 
 const AVATAR_TEXTURE_SIZE = 256;
 const AVATAR_SPRITE_SIZE = 28;
@@ -142,17 +146,259 @@ function getAvatarTexture(dataUrl) {
   return texture;
 }
 
+// ─── developer file/folder icons (material-icon-theme via jsdelivr) ──────────
+
+const ICON_BASE = 'https://cdn.jsdelivr.net/npm/material-icon-theme@latest/icons';
+const ICON_TEXTURE_SIZE = 128;
+
+const FILE_ICON_BY_NAME = {
+  'package.json': 'nodejs',
+  'package-lock.json': 'nodejs',
+  'pnpm-lock.yaml': 'nodejs',
+  'yarn.lock': 'yarn',
+  'bun.lockb': 'bun',
+  'tsconfig.json': 'tsconfig',
+  'jsconfig.json': 'tsconfig',
+  'readme.md': 'readme',
+  'license': 'certificate',
+  'license.md': 'certificate',
+  'license.txt': 'certificate',
+  'dockerfile': 'docker',
+  '.dockerignore': 'docker',
+  '.gitignore': 'git',
+  '.gitattributes': 'git',
+  '.env': 'tune',
+  '.env.example': 'tune',
+  '.env.local': 'tune',
+  'vite.config.js': 'vite',
+  'vite.config.ts': 'vite',
+  'webpack.config.js': 'webpack',
+  'rollup.config.js': 'rollup',
+  'babel.config.js': 'babel',
+  '.babelrc': 'babel',
+  '.eslintrc': 'eslint',
+  '.eslintrc.js': 'eslint',
+  '.eslintrc.json': 'eslint',
+  '.prettierrc': 'prettier',
+  '.prettierrc.json': 'prettier',
+  'cargo.toml': 'rust',
+  'cargo.lock': 'rust',
+  'go.mod': 'go-mod',
+  'go.sum': 'go-mod',
+  'requirements.txt': 'python-misc',
+  'pipfile': 'python-misc',
+  'gemfile': 'gemfile',
+  'makefile': 'makefile',
+  'cmakelists.txt': 'cmake',
+};
+
+const FILE_ICON_BY_EXT = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'react_ts',
+  jsx: 'react',
+  py: 'python', pyi: 'python',
+  rb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  java: 'java',
+  kt: 'kotlin', kts: 'kotlin',
+  swift: 'swift',
+  c: 'c',
+  cpp: 'cpp', cc: 'cpp', cxx: 'cpp',
+  h: 'h', hpp: 'h',
+  cs: 'csharp',
+  php: 'php',
+  html: 'html', htm: 'html',
+  css: 'css',
+  scss: 'sass', sass: 'sass',
+  less: 'less',
+  json: 'json', json5: 'json',
+  yaml: 'yaml', yml: 'yaml',
+  toml: 'toml',
+  xml: 'xml',
+  md: 'markdown', mdx: 'markdown',
+  sh: 'console', bash: 'console', zsh: 'console', fish: 'console',
+  txt: 'document',
+  pdf: 'pdf',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', ico: 'image', bmp: 'image',
+  svg: 'svg',
+  mp4: 'video', mov: 'video', webm: 'video', mkv: 'video',
+  mp3: 'audio', wav: 'audio', flac: 'audio', ogg: 'audio',
+  zip: 'zip', tar: 'zip', gz: 'zip', '7z': 'zip', rar: 'zip',
+  sql: 'database', db: 'database', sqlite: 'database',
+  graphql: 'graphql', gql: 'graphql',
+  vue: 'vue',
+  svelte: 'svelte',
+  astro: 'astro',
+  prisma: 'prisma',
+  proto: 'proto',
+  lock: 'lock',
+};
+
+const FOLDER_ICON_BY_NAME = {
+  src: 'folder-src',
+  source: 'folder-src',
+  lib: 'folder-lib',
+  libs: 'folder-lib',
+  public: 'folder-public',
+  static: 'folder-public',
+  assets: 'folder-resource',
+  images: 'folder-images',
+  img: 'folder-images',
+  fonts: 'folder-font',
+  styles: 'folder-css',
+  style: 'folder-css',
+  css: 'folder-css',
+  scss: 'folder-css',
+  components: 'folder-components',
+  component: 'folder-components',
+  pages: 'folder-views',
+  views: 'folder-views',
+  layouts: 'folder-layout',
+  routes: 'folder-routes',
+  controllers: 'folder-controller',
+  controller: 'folder-controller',
+  models: 'folder-database',
+  schemas: 'folder-database',
+  services: 'folder-mappings',
+  service: 'folder-mappings',
+  middleware: 'folder-middleware',
+  utils: 'folder-utils',
+  util: 'folder-utils',
+  helpers: 'folder-helper',
+  helper: 'folder-helper',
+  hooks: 'folder-hook',
+  store: 'folder-redux',
+  stores: 'folder-redux',
+  api: 'folder-api',
+  apis: 'folder-api',
+  tests: 'folder-test',
+  test: 'folder-test',
+  __tests__: 'folder-test',
+  spec: 'folder-test',
+  e2e: 'folder-e2e',
+  docs: 'folder-docs',
+  doc: 'folder-docs',
+  config: 'folder-config',
+  configs: 'folder-config',
+  scripts: 'folder-scripts',
+  bin: 'folder-scripts',
+  dist: 'folder-dist',
+  build: 'folder-dist',
+  out: 'folder-dist',
+  target: 'folder-dist',
+  node_modules: 'folder-node',
+  '.git': 'folder-git',
+  '.github': 'folder-github',
+  '.vscode': 'folder-vscode',
+  '.idea': 'folder-idea',
+};
+
+function getFileIconName(filename) {
+  if (!filename) return 'file';
+  const lower = filename.toLowerCase();
+  if (FILE_ICON_BY_NAME[lower]) return FILE_ICON_BY_NAME[lower];
+  const dot = lower.lastIndexOf('.');
+  if (dot < 0) return 'file';
+  const ext = lower.slice(dot + 1);
+  return FILE_ICON_BY_EXT[ext] || 'file';
+}
+
+function getFolderIconName(name) {
+  const lower = (name || '').toLowerCase();
+  return FOLDER_ICON_BY_NAME[lower] || 'folder';
+}
+
+const iconTextureCache = new Map();
+
+function getIconTexture(iconName) {
+  const cached = iconTextureCache.get(iconName);
+  if (cached) return cached;
+
+  const size = ICON_TEXTURE_SIZE;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  iconTextureCache.set(iconName, texture);
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    ctx.clearRect(0, 0, size, size);
+    ctx.drawImage(img, 0, 0, size, size);
+    texture.needsUpdate = true;
+  };
+  img.onerror = () => {
+    if (iconName === 'file' || iconName === 'folder') return;
+    const fallback = iconName.startsWith('folder') ? 'folder' : 'file';
+    iconTextureCache.delete(iconName);
+    const fbTex = getIconTexture(fallback);
+    iconTextureCache.set(iconName, fbTex);
+  };
+  img.src = `${ICON_BASE}/${iconName}.svg`;
+  return texture;
+}
+
+function nodeIconKind(node) {
+  const def = node.definitionCore || '';
+  if (def.startsWith('file:')) return 'file';
+  if (def.startsWith('dir:')) return 'dir';
+  if (def.startsWith('repo:')) return 'repo';
+  return null;
+}
+
+// ─── focus ring texture (for the avatar/me node) ─────────────────────────────
+
+let _focusRingTexture = null;
+function getFocusRingTexture() {
+  if (_focusRingTexture) return _focusRingTexture;
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const cx = size / 2;
+  const grad = ctx.createRadialGradient(cx, cx, size * 0.34, cx, cx, size * 0.5);
+  grad.addColorStop(0, 'rgba(120,180,255,0)');
+  grad.addColorStop(0.78, 'rgba(120,180,255,0.55)');
+  grad.addColorStop(0.92, 'rgba(120,180,255,0.25)');
+  grad.addColorStop(1, 'rgba(120,180,255,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cx, cx, 0, Math.PI * 2);
+  ctx.fill();
+  _focusRingTexture = new THREE.CanvasTexture(canvas);
+  _focusRingTexture.colorSpace = THREE.SRGBColorSpace;
+  return _focusRingTexture;
+}
+
 // ─── text sprite ──────────────────────────────────────────────────────────────
 
-function makeTextSprite(text) {
-  const pad = 16;
-  const fontSize = 44;
+const LABEL_PAD = 16;
+const LABEL_SCALE = 0.12;
+const LABEL_INNER_PAD = LABEL_PAD * LABEL_SCALE;
+
+function makeTextSprite({ label, code = '' }) {
+  const labelSize = 44;
+  const codeSize = 26;
+  const lineGap = 6;
+
   const measureCanvas = document.createElement('canvas');
   const mctx = measureCanvas.getContext('2d');
-  mctx.font = `300 ${fontSize}px 'Sora', system-ui, sans-serif`;
-  const textWidth = Math.ceil(mctx.measureText(text).width);
-  const w = textWidth + pad * 2;
-  const h = fontSize + pad * 2;
+  mctx.font = `300 ${labelSize}px 'Sora', system-ui, sans-serif`;
+  const labelWidth = Math.ceil(mctx.measureText(label).width);
+  let codeWidth = 0;
+  if (code) {
+    mctx.font = `400 ${codeSize}px 'Sora', system-ui, sans-serif`;
+    codeWidth = Math.ceil(mctx.measureText(code).width);
+  }
+  const w = Math.max(labelWidth, codeWidth) + LABEL_PAD * 2;
+  const h = code
+    ? LABEL_PAD + labelSize + lineGap + codeSize + LABEL_PAD
+    : labelSize + LABEL_PAD * 2;
+
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
@@ -169,17 +415,25 @@ function makeTextSprite(text) {
   ctx.strokeStyle = 'rgba(100,150,255,0.12)';
   ctx.lineWidth = 1;
   ctx.stroke();
-  ctx.font = `300 ${fontSize}px 'Sora', system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(200,215,240,0.9)';
-  ctx.textBaseline = 'middle';
+
   ctx.textAlign = 'center';
-  ctx.fillText(text, w / 2, h / 2);
+  ctx.font = `300 ${labelSize}px 'Sora', system-ui, sans-serif`;
+  ctx.fillStyle = 'rgba(200,215,240,0.9)';
+  if (code) {
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(label, w / 2, LABEL_PAD + labelSize * 0.78);
+    ctx.font = `400 ${codeSize}px 'Sora', system-ui, sans-serif`;
+    ctx.fillStyle = 'rgba(140,180,230,0.5)';
+    ctx.fillText(code, w / 2, LABEL_PAD + labelSize + lineGap + codeSize * 0.78);
+  } else {
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, w / 2, h / 2);
+  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: false });
   const sprite = new THREE.Sprite(material);
-  const scale = 0.12;
-  sprite.scale.set(w * scale, h * scale, 1);
+  sprite.scale.set(w * LABEL_SCALE, h * LABEL_SCALE, 1);
   sprite.renderOrder = 999;
   return sprite;
 }
@@ -211,8 +465,13 @@ function makeExpressionBadge(count) {
 
 // ─── node 3D object ───────────────────────────────────────────────────────────
 
+const ICON_SPRITE_SIZE = 11;
+const ICON_FILE_SPRITE_SIZE = 9;
+
 function buildNodeObject(node) {
   const group = new THREE.Group();
+  const isFocused = node.id === focusedNodeId;
+  const iconKind = node.id === 'me' ? null : nodeIconKind(node);
 
   if (node.id === 'me') {
     const mat = new THREE.SpriteMaterial({
@@ -223,6 +482,41 @@ function buildNodeObject(node) {
     const sprite = new THREE.Sprite(mat);
     sprite.scale.set(AVATAR_SPRITE_SIZE, AVATAR_SPRITE_SIZE, 1);
     group.add(sprite);
+
+    if (isFocused) {
+      const ringMat = new THREE.SpriteMaterial({
+        map: getFocusRingTexture(),
+        transparent: true,
+        depthWrite: false,
+      });
+      const ring = new THREE.Sprite(ringMat);
+      ring.scale.set(AVATAR_SPRITE_SIZE * 1.4, AVATAR_SPRITE_SIZE * 1.4, 1);
+      group.add(ring);
+    }
+  } else if (iconKind) {
+    const name = node.canonicalName || node.label || '';
+    const iconName = iconKind === 'file'
+      ? getFileIconName(name)
+      : iconKind === 'repo'
+        ? 'folder-git'
+        : getFolderIconName(name);
+    const tex = getIconTexture(iconName);
+    const size = iconKind === 'file' ? ICON_FILE_SPRITE_SIZE : ICON_SPRITE_SIZE;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(size, size, 1);
+    group.add(sprite);
+
+    if (isFocused) {
+      const ringMat = new THREE.SpriteMaterial({
+        map: getFocusRingTexture(),
+        transparent: true,
+        depthWrite: false,
+      });
+      const ring = new THREE.Sprite(ringMat);
+      ring.scale.set(size * 1.7, size * 1.7, 1);
+      group.add(ring);
+    }
   } else {
     const isShared = !!node.sharedSpace;
     const color = isShared ? 0xffd700 : resonanceColor(node.resonanceState || 'active');
@@ -258,15 +552,33 @@ function buildNodeObject(node) {
     if (node.expressionCount > 0) {
       group.add(makeExpressionBadge(node.expressionCount));
     }
+
+    // Focus halo
+    if (isFocused) {
+      const haloGeom = new THREE.SphereGeometry(CONCEPT_NODE_RADIUS + 1.6, 16, 16);
+      const haloMat = new THREE.MeshBasicMaterial({
+        color: 0x6f86ff,
+        transparent: true,
+        opacity: 0.32,
+        side: THREE.BackSide,
+      });
+      group.add(new THREE.Mesh(haloGeom, haloMat));
+    }
   }
 
-  const display = node.id === 'me'
-    ? 'me'
-    : (node.code ? `${node.code}: ${node.label || node.canonicalName}` : (node.label || node.canonicalName));
+  const labelText = node.id === 'me'
+    ? (node.label || 'wayfinder')
+    : (node.label || node.canonicalName || '');
+  const codeText = node.id === 'me' ? '' : (node.code || '');
 
-  if (display) {
-    const label = makeTextSprite(display);
-    const yOffset = node.id === 'me' ? AVATAR_SPRITE_SIZE / 2 + 3 : CONCEPT_NODE_RADIUS + 3;
+  if (labelText) {
+    const label = makeTextSprite({ label: labelText, code: codeText });
+    let nodeBottom;
+    if (node.id === 'me') nodeBottom = AVATAR_SPRITE_SIZE / 2;
+    else if (iconKind) nodeBottom = (iconKind === 'file' ? ICON_FILE_SPRITE_SIZE : ICON_SPRITE_SIZE) / 2;
+    else nodeBottom = CONCEPT_NODE_RADIUS;
+    // Position so the visible top of the label text sits ~1 unit below the node bottom.
+    const yOffset = -(nodeBottom + 1) - label.scale.y / 2 + LABEL_INNER_PAD;
     label.position.set(0, yOffset, 0);
     group.add(label);
   }
@@ -277,6 +589,9 @@ function buildNodeObject(node) {
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function scheduleFit() {
+  // When the user has explicitly focused a node, don't auto-fit — it would
+  // yank the camera away from their chosen subject as new children arrive.
+  if (focusedNodeId && focusedNodeId !== 'me') return;
   clearTimeout(fitTimer);
   fitTimer = setTimeout(() => {
     try { graph.zoomToFit(600, 80); } catch (e) { console.warn('[graph] zoomToFit failed', e); }
@@ -387,6 +702,10 @@ export function init(container, tip) {
       event.preventDefault?.();
       nodeRightClickCb(node, event);
     })
+    .onNodeClick(node => focusOnNode(node))
+    .onBackgroundClick(event => {
+      if (backgroundClickCb && event) backgroundClickCb(event);
+    })
     .linkDirectionalParticles(2)
     .linkDirectionalParticleWidth(1.5)
     .onLinkHover(link => {
@@ -423,7 +742,7 @@ export function init(container, tip) {
   graph.d3Force('link').distance(40);
 
   graph.graphData({
-    nodes: [{ id: 'me', label: 'me', avatar: getAvatar() }],
+    nodes: [{ id: 'me', label: getUserName() || 'wayfinder', avatar: getAvatar() }],
     links: []
   });
 
@@ -462,6 +781,15 @@ export function setAvatar(dataUrl) {
   const me = data.nodes.find(n => n.id === 'me');
   if (me) {
     me.avatar = dataUrl;
+    graph.nodeThreeObject(graph.nodeThreeObject());
+  }
+}
+
+export function setMyName(name) {
+  const data = graph.graphData();
+  const me = data.nodes.find(n => n.id === 'me');
+  if (me) {
+    me.label = name;
     graph.nodeThreeObject(graph.nodeThreeObject());
   }
 }
@@ -667,4 +995,64 @@ export function onMeHover(cb) {
 
 export function onNodeRightClick(cb) {
   nodeRightClickCb = cb;
+}
+
+export function onBackgroundClick(cb) {
+  backgroundClickCb = cb;
+}
+
+export function onFocusChange(cb) {
+  focusChangeCb = cb;
+}
+
+export function getFocusedNodeId() {
+  return focusedNodeId;
+}
+
+export function getFocusedNode() {
+  const data = graph.graphData();
+  return data.nodes.find(n => n.id === focusedNodeId) || null;
+}
+
+export function setFocusedNode(idOrNode) {
+  const id = typeof idOrNode === 'string' ? idOrNode : (idOrNode?.id || 'me');
+  const data = graph.graphData();
+  const node = data.nodes.find(n => n.id === id) || data.nodes.find(n => n.id === 'me');
+  if (!node) return;
+  focusOnNode(node, { animate: id !== 'me' });
+}
+
+function focusOnNode(node, opts = {}) {
+  if (!node) return;
+  const animate = opts.animate !== false;
+  focusedNodeId = node.id;
+  refreshNodeVisuals();
+  if (focusChangeCb) focusChangeCb(node);
+  if (!animate) return;
+
+  // Pan-only: keep current camera distance/angle, just re-center on the node.
+  const cam = graph.camera?.();
+  const controls = graph.controls?.();
+  const target = controls?.target || { x: 0, y: 0, z: 0 };
+  const camPos = cam?.position || { x: 0, y: 0, z: 250 };
+  const offset = {
+    x: camPos.x - target.x,
+    y: camPos.y - target.y,
+    z: camPos.z - target.z,
+  };
+  const nx = node.x || 0, ny = node.y || 0, nz = node.z || 0;
+  graph.cameraPosition(
+    { x: nx + offset.x, y: ny + offset.y, z: nz + offset.z },
+    { x: nx, y: ny, z: nz },
+    700
+  );
+}
+
+export function listNodesForPicker() {
+  const data = graph.graphData();
+  return data.nodes.map(n => ({
+    id: n.id,
+    code: n.code || (n.id === 'me' ? 'me' : null),
+    label: n.id === 'me' ? (n.label || 'me') : (n.canonicalName || n.label || n.id),
+  }));
 }

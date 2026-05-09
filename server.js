@@ -1,9 +1,16 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import { execFile as _execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import * as store from './pharos-store.js';
 import { resolve as pharosResolve } from './pharos-resolver.js';
+
+const execFile = promisify(_execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,7 +50,7 @@ app.post('/ingest', async (req, res) => {
     return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not set on the server' });
   }
 
-  const { transcript, assistantPrior } = req.body || {};
+  const { transcript, assistantPrior, focusedParentId } = req.body || {};
   if (!transcript || typeof transcript !== 'string') {
     return res.status(400).json({ error: 'transcript (string) required' });
   }
@@ -60,7 +67,7 @@ app.post('/ingest', async (req, res) => {
       created: new Date().toISOString()
     });
 
-    const result = await pharosResolve(transcript, assistantPrior || '', contextId);
+    const result = await pharosResolve(transcript, assistantPrior || '', contextId, focusedParentId);
     res.json({ context_id: contextId, ...result });
   } catch (err) {
     console.error('[ingest] error', err);
@@ -126,6 +133,212 @@ app.delete('/ingest/node/:id', (req, res) => {
     const result = store.removeNode(req.params.id);
     res.json(result);
   } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
+
+// ─── /ingest/node — manually create a node + connections ─────────────────────
+
+function randId() {
+  return Math.random().toString(36).slice(2, 8);
+}
+
+// ─── /ingest/github — clone a repo, graph its file/folder DAG ────────────────
+
+const GH_IGNORE_DIRS = new Set([
+  '.git', 'node_modules', '.next', 'dist', 'build', 'out', 'target',
+  '.venv', 'venv', '__pycache__', '.idea', '.vscode', '.pytest_cache',
+  '.turbo', '.cache', 'vendor', '.gradle', '.mvn', 'bin', 'obj',
+  '.terraform', '.serverless'
+]);
+const GH_IGNORE_FILES = new Set([
+  'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+  'Cargo.lock', 'composer.lock', 'Gemfile.lock', 'poetry.lock',
+  '.DS_Store', 'Thumbs.db'
+]);
+
+const TIER_CONFIG = {
+  small:  { cap: 300,            depth: 5  },
+  medium: { cap: 1000,           depth: 8  },
+  full:   { cap: Infinity,       depth: Infinity },
+};
+
+function repoNameFromUrl(url) {
+  const m = url.match(/[\/:]([^\/:]+?)(?:\.git)?\/?$/);
+  return m ? m[1] : 'repo';
+}
+
+function repoSlug(url) {
+  // pull "owner/repo" from common forms; fallback to repo name
+  const cleaned = url.replace(/\.git\/?$/, '').replace(/\/$/, '');
+  const m = cleaned.match(/[\/:]([^\/:]+\/[^\/:]+)$/);
+  if (m) return m[1].toLowerCase();
+  return repoNameFromUrl(url).toLowerCase();
+}
+
+function isValidRepoUrl(url) {
+  if (typeof url !== 'string') return false;
+  return /^(https?:\/\/|git@|git:\/\/|ssh:\/\/)\S+/.test(url.trim());
+}
+
+function ghPathId(slug, relPath) {
+  const hash = createHash('sha1').update(`${slug}::${relPath}`).digest('hex').slice(0, 12);
+  return `node-gh-${hash}`;
+}
+
+function makeRepoNode(id, name, parentId, definitionCore) {
+  return {
+    id,
+    canonical_name: name,
+    definition_core: definitionCore,
+    type: 'subject',
+    resonance_state: 'active',
+    confidence: 'seed',
+    top: '', bottom: '', front: '', back: '', left: '', right: '',
+    parent_id: parentId,
+  };
+}
+
+async function ingestRepoTree(url, focusParentId, tier) {
+  const cfg = TIER_CONFIG[tier] || TIER_CONFIG.small;
+  const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pharos-gh-'));
+
+  try {
+    await execFile('git', [
+      'clone', '--depth=1', '--single-branch', '--no-tags',
+      url, tmpRoot,
+    ], { timeout: 120_000, maxBuffer: 32 * 1024 * 1024 });
+
+    const repoName = repoNameFromUrl(url);
+    const slug = repoSlug(url);
+
+    const resolvedParent = focusParentId && store.getNode(focusParentId) ? focusParentId : 'me';
+    const repoId = ghPathId(slug, '');
+
+    const created = [];
+    let count = 0;
+    let truncated = false;
+
+    function persist(node, parentId) {
+      const existing = store.getNode(node.id);
+      if (existing) {
+        const code = store.assignCode(node.id, parentId);
+        created.push({ ...existing, code });
+        return existing;
+      }
+      if (count >= cfg.cap) { truncated = true; return null; }
+      count++;
+      const stored = store.addNode(node);
+      const code = store.assignCode(node.id, parentId);
+      created.push({ ...store.getNode(node.id), code });
+      return stored;
+    }
+
+    persist(makeRepoNode(repoId, repoName, resolvedParent, `repo: ${slug}`), resolvedParent);
+
+    async function walk(absDir, relDir, parentId, depth) {
+      if (depth > cfg.depth) return;
+      let entries;
+      try {
+        entries = await fs.readdir(absDir, { withFileTypes: true });
+      } catch { return; }
+      // Sort: directories first, then alphabetical
+      entries.sort((a, b) => {
+        const ad = a.isDirectory() ? 0 : 1;
+        const bd = b.isDirectory() ? 0 : 1;
+        if (ad !== bd) return ad - bd;
+        return a.name.localeCompare(b.name);
+      });
+      for (const ent of entries) {
+        if (count >= cfg.cap) { truncated = true; return; }
+        if (ent.isDirectory()) {
+          if (GH_IGNORE_DIRS.has(ent.name)) continue;
+          const rel = relDir ? `${relDir}/${ent.name}` : ent.name;
+          const id = ghPathId(slug, rel);
+          const made = persist(makeRepoNode(id, ent.name, parentId, `dir: ${rel}`), parentId);
+          if (!made) return;
+          await walk(path.join(absDir, ent.name), rel, id, depth + 1);
+        } else if (ent.isFile()) {
+          if (GH_IGNORE_FILES.has(ent.name)) continue;
+          const rel = relDir ? `${relDir}/${ent.name}` : ent.name;
+          const id = ghPathId(slug, rel);
+          persist(makeRepoNode(id, ent.name, parentId, `file: ${rel}`), parentId);
+        }
+      }
+    }
+
+    await walk(tmpRoot, '', repoId, 1);
+
+    return {
+      repoName,
+      rootId: repoId,
+      rootParentId: resolvedParent,
+      nodes: created,
+      claims: [],
+      tier,
+      truncated,
+      nodeCount: count,
+    };
+  } finally {
+    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+app.post('/ingest/github', async (req, res) => {
+  const { url, parent_id, tier = 'small' } = req.body || {};
+  if (!isValidRepoUrl(url)) return res.status(400).json({ error: 'invalid repo url' });
+  if (!TIER_CONFIG[tier]) return res.status(400).json({ error: `invalid tier: ${tier}` });
+  try {
+    const result = await ingestRepoTree(url.trim(), parent_id, tier);
+    res.json(result);
+  } catch (err) {
+    console.error('[github] error', err);
+    const msg = err.stderr?.toString?.() || err.message || String(err);
+    res.status(500).json({ error: msg.split('\n').slice(0, 3).join(' ').slice(0, 400) });
+  }
+});
+
+app.post('/ingest/node', (req, res) => {
+  try {
+    const { name, parent_id, connections } = req.body || {};
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) return res.status(400).json({ error: 'name (string) required' });
+
+    const resolvedParent = parent_id && store.getNode(parent_id) ? parent_id : 'me';
+    const otherIds = Array.isArray(connections)
+      ? connections.filter(id => typeof id === 'string' && id !== resolvedParent && store.getNode(id))
+      : [];
+
+    const nodeId = `node-manual-${Date.now()}-${randId()}`;
+    const node = store.addNode({
+      id: nodeId,
+      canonical_name: trimmed,
+      definition_core: '',
+      type: 'subject',
+      resonance_state: 'active',
+      confidence: 'seed',
+      top: '', bottom: '', front: '', back: '', left: '', right: '',
+      parent_id: resolvedParent,
+    });
+    const code = store.assignCode(nodeId, resolvedParent);
+    const persistedNode = { ...store.getNode(nodeId), code };
+
+    const claims = [];
+    for (const otherId of otherIds) {
+      const claim = store.addClaim({
+        id: `claim-manual-${Date.now()}-${randId()}`,
+        predicate: 'DEPENDS_ON',
+        subject_node: nodeId,
+        object_node: otherId,
+        confidence: 'medium',
+        reasoning: 'manually connected',
+      });
+      claims.push(claim);
+    }
+
+    res.json({ node: persistedNode, parentId: resolvedParent, claims });
+  } catch (err) {
+    console.error('[manual-node] error', err);
     res.status(500).json({ error: String(err.message || err) });
   }
 });

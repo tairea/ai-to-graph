@@ -5,7 +5,7 @@ import * as store from './pharos-store.js';
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const RESOLVE_MODEL = process.env.RESOLVE_MODEL || 'claude-sonnet-4-6';
 
-export async function resolve(transcript, assistantPrior, contextId) {
+export async function resolve(transcript, assistantPrior, contextId, focusedParentId) {
   const existingNodes = store.getStoreSummary();
   const systemPrompt = buildPHAROSSystemPrompt(existingNodes);
 
@@ -36,8 +36,16 @@ export async function resolve(transcript, assistantPrior, contextId) {
   // Apply results to store and enrich with codes
   const processed = [];
 
+  const hasFocus = focusedParentId && focusedParentId !== 'me' && store.getNode(focusedParentId);
+
   for (const result of raw.results || []) {
     if (result.outcome === 'new' && result.node) {
+      // Strict-override: when a node is focused, route any new top-level concept
+      // (parent_id 'me' or missing) under the focused node. Explicit AI-chosen
+      // parents under specific other nodes are preserved.
+      if (hasFocus && (!result.node.parent_id || result.node.parent_id === 'me')) {
+        result.node.parent_id = focusedParentId;
+      }
       const node = store.addNode(result.node);
       const parentId = result.node.parent_id || 'me';
       const code = store.assignCode(node.id, parentId);

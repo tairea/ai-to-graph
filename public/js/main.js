@@ -1,6 +1,7 @@
 import * as graph from './graph.js';
 import * as realtime from './realtime.js';
 import { setAvatarFromFile } from './avatar.js';
+import { getUserName, setUserName } from './user.js';
 
 const VOICES = [
   'alloy', 'ash', 'ballad', 'coral', 'echo',
@@ -10,6 +11,7 @@ const VOICES = [
 const statusEl = document.getElementById('status');
 const statusPill = document.getElementById('status-pill');
 const micBtn = document.getElementById('mic-btn');
+const micArea = document.getElementById('mic-area');
 const avatarInput = document.getElementById('avatar-input');
 const avatarEdit = document.getElementById('avatar-edit');
 const graphEl = document.getElementById('graph');
@@ -29,11 +31,15 @@ const peersList = document.getElementById('peers-list');
 const peersDidBadge = document.getElementById('peers-did');
 const peerAddBtn = document.getElementById('peer-add-btn');
 const processingPill = document.getElementById('processing-pill');
-const inputModeBtn = document.getElementById('input-mode-btn');
+const modeRow = document.getElementById('mode-row');
+const modeButtons = modeRow ? Array.from(modeRow.querySelectorAll('.mode-btn')) : [];
 const textInputForm = document.getElementById('text-input-form');
 const textInput = document.getElementById('text-input');
-const modeIconKeyboard = inputModeBtn?.querySelector('.mode-icon-keyboard');
-const modeIconMic = inputModeBtn?.querySelector('.mode-icon-mic');
+const githubInputForm = document.getElementById('github-input-form');
+const githubInput = document.getElementById('github-input');
+const focusPill = document.getElementById('focus-pill');
+const focusTargetEl = document.getElementById('focus-target');
+const focusClearBtn = document.getElementById('focus-clear');
 
 let live = false;
 let processingCount = 0;
@@ -83,9 +89,13 @@ function closeVoiceModal() {
 }
 
 infoBtn.addEventListener('click', () => {
-  const open = !infoPanel.hidden;
-  infoPanel.hidden = open;
-  infoBtn.setAttribute('aria-expanded', !open);
+  const willOpen = infoPanel.hidden;
+  infoPanel.hidden = !willOpen;
+  infoBtn.setAttribute('aria-expanded', willOpen);
+  if (willOpen && peersPanel && !peersPanel.hidden) {
+    peersPanel.hidden = true;
+    peersBtn?.setAttribute('aria-expanded', 'false');
+  }
 });
 
 voiceBtn.addEventListener('click', () => {
@@ -145,7 +155,7 @@ async function handleTranscript({ transcript, assistantPrior }) {
         'Content-Type': 'application/json',
         'X-Session-Id': getSessionId()
       },
-      body: JSON.stringify({ transcript, assistantPrior })
+      body: JSON.stringify({ transcript, assistantPrior, focusedParentId: graph.getFocusedNodeId() })
     });
 
     if (!res.ok) {
@@ -209,44 +219,40 @@ micBtn.addEventListener('click', async () => {
   }
 });
 
-// ─── Input mode toggle (voice ↔ text) ────────────────────────────────────────
+// ─── Input mode (voice / text / github) ──────────────────────────────────────
 
 function setInputMode(mode) {
-  if (mode !== 'voice' && mode !== 'text') return;
+  if (!['voice', 'text', 'github', 'file'].includes(mode)) return;
   if (mode === inputMode) return;
   inputMode = mode;
 
-  if (mode === 'text') {
-    if (live) {
-      realtime.stop();
-      live = false;
-      micBtn.dataset.live = 'false';
-      setStatus('ready');
-    }
-    micBtn.hidden = true;
-    textInputForm.hidden = false;
-    inputModeBtn.dataset.mode = 'text';
-    inputModeBtn.setAttribute('aria-label', 'Switch to voice input');
-    inputModeBtn.title = 'Switch to voice input';
-    if (modeIconKeyboard) modeIconKeyboard.style.display = 'none';
-    if (modeIconMic) modeIconMic.style.display = '';
-    textInput.focus();
-  } else {
-    micBtn.hidden = false;
-    textInputForm.hidden = true;
-    inputModeBtn.dataset.mode = 'voice';
-    inputModeBtn.setAttribute('aria-label', 'Switch to text input');
-    inputModeBtn.title = 'Switch to text input';
-    if (modeIconKeyboard) modeIconKeyboard.style.display = '';
-    if (modeIconMic) modeIconMic.style.display = 'none';
+  // Stop voice when switching away
+  if (mode !== 'voice' && live) {
+    realtime.stop();
+    live = false;
+    micBtn.dataset.live = 'false';
+    setStatus('ready');
   }
+
+  if (micArea) micArea.hidden = mode !== 'voice';
+  micBtn.hidden = mode !== 'voice';
+  if (textInputForm) textInputForm.hidden = mode !== 'text';
+  if (githubInputForm) githubInputForm.hidden = mode !== 'github';
+  if (dropZone) dropZone.hidden = mode !== 'file';
+
+  for (const btn of modeButtons) {
+    btn.classList.toggle('is-active', btn.dataset.mode === mode);
+  }
+
+  if (mode === 'text') textInput?.focus();
+  else if (mode === 'github') githubInput?.focus();
 
   localStorage.setItem('pharos-input-mode', mode);
 }
 
-inputModeBtn?.addEventListener('click', () => {
-  setInputMode(inputMode === 'voice' ? 'text' : 'voice');
-});
+for (const btn of modeButtons) {
+  btn.addEventListener('click', () => setInputMode(btn.dataset.mode));
+}
 
 textInputForm?.addEventListener('submit', e => {
   e.preventDefault();
@@ -256,7 +262,70 @@ textInputForm?.addEventListener('submit', e => {
   handleTranscript({ transcript: text, assistantPrior: '' });
 });
 
-if (localStorage.getItem('pharos-input-mode') === 'text') setInputMode('text');
+// ─── GitHub repo ingest ─────────────────────────────────────────────────────
+
+async function ingestRepo(url, tier = 'small') {
+  beginProcessing();
+  try {
+    const res = await fetch('ingest/github', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        parent_id: graph.getFocusedNodeId(),
+        tier,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      showToast('Repo failed: ' + err.slice(0, 140), 'error');
+      return;
+    }
+    const result = await res.json();
+    const { nodes = [], rootParentId, repoName, truncated, tier: resolvedTier, nodeCount } = result;
+
+    // Add parents before children using the order returned (root → walk order)
+    for (const node of nodes) {
+      graph.addPharosNode({ node, parentId: node.parent_id || rootParentId || 'me' });
+    }
+
+    if (truncated && resolvedTier === 'small') {
+      showActionToast(
+        `+${nodeCount} from ${repoName} (capped at 300)`,
+        'continue → 1000',
+        () => ingestRepo(url, 'medium'),
+        'success',
+        10000,
+      );
+    } else if (truncated && resolvedTier === 'medium') {
+      showActionToast(
+        `+${nodeCount} from ${repoName} (capped at 1000)`,
+        'continue → all',
+        () => ingestRepo(url, 'full'),
+        'success',
+        12000,
+      );
+    } else {
+      showToast(`+${nodeCount} from ${repoName}`, 'success');
+    }
+  } catch (err) {
+    console.error('[github] error', err);
+    showToast('Repo failed: ' + err.message, 'error');
+  } finally {
+    endProcessing();
+  }
+}
+
+githubInputForm?.addEventListener('submit', e => {
+  e.preventDefault();
+  const url = githubInput.value.trim();
+  if (!url) return;
+  githubInput.value = '';
+  ingestRepo(url, 'small');
+});
+
+const savedMode = localStorage.getItem('pharos-input-mode');
+if (savedMode === 'text' || savedMode === 'github' || savedMode === 'file') setInputMode(savedMode);
 
 function getSessionId() {
   if (!sessionStorage.pharosSessionId) {
@@ -276,6 +345,48 @@ function showToast(msg, type = '') {
   toastTimer = setTimeout(() => { toast.hidden = true; }, 3000);
 }
 
+function showActionToast(msg, actionLabel, onAction, type = '', timeoutMs = 8000) {
+  toast.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  toast.appendChild(span);
+  const btn = document.createElement('button');
+  btn.className = 'toast-action';
+  btn.textContent = actionLabel;
+  btn.addEventListener('click', () => {
+    clearTimeout(toastTimer);
+    toast.hidden = true;
+    onAction();
+  });
+  toast.appendChild(btn);
+  toast.className = (type ? type + ' ' : '') + 'has-action';
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, timeoutMs);
+}
+
+// ─── Focus pill (current parent indicator) ──────────────────────────────────
+
+function updateFocusPill(node) {
+  if (!focusPill || !focusTargetEl) return;
+  const isMe = !node || node.id === 'me';
+  if (isMe) {
+    focusPill.hidden = true;
+    return;
+  }
+  const code = node.code ? `${node.code}: ` : '';
+  const name = node.canonicalName || node.label || node.id;
+  focusTargetEl.textContent = `${code}${name}`;
+  focusPill.hidden = false;
+}
+
+graph.onFocusChange(node => updateFocusPill(node));
+
+focusClearBtn?.addEventListener('click', () => {
+  graph.setFocusedNode('me');
+  updateFocusPill(graph.getFocusedNode());
+});
+
 async function ingestMdFile(text, filename) {
   beginProcessing();
   try {
@@ -285,7 +396,11 @@ async function ingestMdFile(text, filename) {
         'Content-Type': 'application/json',
         'X-Session-Id': getSessionId()
       },
-      body: JSON.stringify({ transcript: text, assistantPrior: `[file: ${filename}]` })
+      body: JSON.stringify({
+        transcript: text,
+        assistantPrior: `[file: ${filename}]`,
+        focusedParentId: graph.getFocusedNodeId(),
+      })
     });
 
     if (!res.ok) {
@@ -487,6 +602,10 @@ if (peersBtn && peersPanel) {
     peersPanel.hidden = !willOpen;
     peersBtn.setAttribute('aria-expanded', willOpen);
     if (willOpen) {
+      if (infoPanel && !infoPanel.hidden) {
+        infoPanel.hidden = true;
+        infoBtn?.setAttribute('aria-expanded', 'false');
+      }
       const peers = await loadPeers();
       renderPeerList(peers);
     }
@@ -659,6 +778,143 @@ function showShareSpecificModal(node) {
   overlay.querySelector('#share-did-input').focus();
 }
 
+// ─── manual node add (click empty space) ────────────────────────────────────
+
+const addNodePopover = document.getElementById('add-node-popover');
+const addNodeForm = document.getElementById('add-node-form');
+const addNodeName = document.getElementById('add-node-name');
+const addNodeConnections = document.getElementById('add-node-connections');
+const addNodeCancelBtn = addNodePopover?.querySelector('[data-action="cancel"]');
+
+let addNodeMarker = null;
+let addNodeSelected = []; // ordered array of node ids; first is parent
+
+function closeAddNode() {
+  if (!addNodePopover) return;
+  addNodePopover.classList.remove('is-open');
+  setTimeout(() => { addNodePopover.hidden = true; }, 180);
+  if (addNodeMarker) {
+    addNodeMarker.remove();
+    addNodeMarker = null;
+  }
+  addNodeSelected = [];
+  if (addNodeForm) addNodeForm.reset();
+}
+
+function renderConnectionList() {
+  if (!addNodeConnections) return;
+  const all = graph.listNodesForPicker();
+  addNodeConnections.innerHTML = '';
+  if (!all.length) {
+    addNodeConnections.innerHTML = '<div class="add-node-empty">no nodes yet — saved as a top-level concept</div>';
+    return;
+  }
+  for (const n of all) {
+    const idx = addNodeSelected.indexOf(n.id);
+    const isSelected = idx !== -1;
+    const isParent = idx === 0;
+    const row = document.createElement('div');
+    row.className = 'add-node-conn-row' + (isSelected ? ' is-selected' : '') + (isParent ? ' is-parent' : '');
+    row.dataset.id = n.id;
+    row.innerHTML = `
+      <span class="add-node-conn-code">${n.code || '·'}</span>
+      <span class="add-node-conn-name">${n.label}</span>
+      ${isParent ? '<span class="add-node-conn-tag">parent</span>' : ''}
+    `;
+    row.addEventListener('click', () => {
+      const i = addNodeSelected.indexOf(n.id);
+      if (i === -1) addNodeSelected.push(n.id);
+      else addNodeSelected.splice(i, 1);
+      renderConnectionList();
+    });
+    addNodeConnections.appendChild(row);
+  }
+}
+
+function placeAddNodePopover(clientX, clientY) {
+  if (!addNodePopover) return;
+  const popW = 280;
+  const popH = 320; // approximate
+  const margin = 12;
+  let left = clientX + margin;
+  let top = clientY + margin;
+  if (left + popW > window.innerWidth - margin) left = clientX - popW - margin;
+  if (top + popH > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - popH - margin);
+  if (left < margin) left = margin;
+  if (top < margin) top = margin;
+  addNodePopover.style.left = left + 'px';
+  addNodePopover.style.top = top + 'px';
+}
+
+function openAddNode(clientX, clientY) {
+  if (!addNodePopover) return;
+  addNodeSelected = [];
+  renderConnectionList();
+  placeAddNodePopover(clientX, clientY);
+  addNodePopover.hidden = false;
+  requestAnimationFrame(() => addNodePopover.classList.add('is-open'));
+
+  if (addNodeMarker) addNodeMarker.remove();
+  addNodeMarker = document.createElement('div');
+  addNodeMarker.id = 'add-node-marker';
+  addNodeMarker.style.left = clientX + 'px';
+  addNodeMarker.style.top = clientY + 'px';
+  document.body.appendChild(addNodeMarker);
+
+  setTimeout(() => addNodeName?.focus(), 60);
+}
+
+graph.onBackgroundClick(event => {
+  if (!event) return;
+  if (addNodePopover && !addNodePopover.hidden) { closeAddNode(); return; }
+  closeContextMenu();
+  openAddNode(event.clientX, event.clientY);
+});
+
+addNodeCancelBtn?.addEventListener('click', closeAddNode);
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && addNodePopover && !addNodePopover.hidden) closeAddNode();
+});
+
+// click anywhere outside popover (and outside graph background, which already handles toggle) closes
+document.addEventListener('mousedown', e => {
+  if (!addNodePopover || addNodePopover.hidden) return;
+  if (e.target.closest('#add-node-popover')) return;
+  if (e.target.closest('#graph')) return; // background-click handler manages this
+  closeAddNode();
+});
+
+addNodeForm?.addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = addNodeName.value.trim();
+  if (!name) return;
+  const parent_id = addNodeSelected[0] || 'me';
+  const connections = addNodeSelected.slice(1);
+  beginProcessing();
+  try {
+    const res = await fetch('ingest/node', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parent_id, connections }),
+    });
+    if (!res.ok) {
+      showToast('Add failed: ' + (await res.text()), 'error');
+      return;
+    }
+    const { node, parentId, claims = [] } = await res.json();
+    graph.addPharosNode({ node, parentId });
+    for (const claim of claims) graph.addPharosClaim(claim);
+    showToast(`+${name}`, 'success');
+    closeAddNode();
+  } catch (err) {
+    console.error('[manual-add] error', err);
+    showToast('Add failed: ' + err.message, 'error');
+  } finally {
+    endProcessing();
+  }
+});
+
 // ─── SSE: ingest live remote shared nodes/claims ────────────────────────────
 
 function startSSE() {
@@ -715,6 +971,33 @@ async function hydrateState() {
     console.warn('[hydrate] failed', err);
   }
 }
+
+// ─── welcome screen (first-run name capture) ────────────────────────────────
+
+(function initWelcome() {
+  const overlay = document.getElementById('welcome-overlay');
+  const form = document.getElementById('welcome-form');
+  const input = document.getElementById('welcome-name');
+  if (!overlay) return;
+
+  const existing = getUserName();
+  if (existing) {
+    overlay.hidden = true;
+    return;
+  }
+
+  setTimeout(() => input?.focus(), 700);
+
+  form?.addEventListener('submit', e => {
+    e.preventDefault();
+    const name = input.value.trim();
+    if (!name) return;
+    setUserName(name);
+    graph.setMyName(name);
+    overlay.classList.add('fade-out');
+    setTimeout(() => { overlay.hidden = true; }, 750);
+  });
+})();
 
 loadIdentity();
 hydrateState();

@@ -3,11 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PHAROS — voice-to-graph</title>
+    <title>voice-to-graph</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="style.css" />
+    <script>
+      // Synchronously decide whether to show the welcome overlay BEFORE the
+      // body parses, so returning users never see it flash.
+      try {
+        if (localStorage.getItem('pharos-username')) {
+          document.documentElement.classList.add('has-username');
+        }
+      } catch {}
+    </script>
     <script type="importmap">
       {
         "imports": {
@@ -19,6 +28,21 @@
     </script>
   </head>
   <body>
+    <div id="welcome-overlay">
+      <div class="welcome-content">
+        <h1 class="welcome-greeting">greetings wayfinder</h1>
+        <p class="welcome-subtitle">please enter your name</p>
+        <form id="welcome-form" autocomplete="off">
+          <input id="welcome-name" type="text" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="your name" maxlength="40" required />
+          <button type="submit" aria-label="continue">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"/>
+              <polyline points="12 5 19 12 12 19"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+    </div>
     <div id="graph"></div>
     <div id="tip" hidden></div>
     <audio id="remote" autoplay></audio>
@@ -37,25 +61,73 @@
         <span class="processing-dots"><i></i><i></i><i></i></span>
         <span>processing</span>
       </div>
+      <div id="mode-row" role="tablist" aria-label="Input mode">
+        <button class="mode-btn is-active" data-mode="voice" aria-label="Voice input" title="Voice input">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+        <button class="mode-btn" data-mode="text" aria-label="Text input" title="Text input">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="2"/>
+            <line x1="6" y1="10" x2="6.01" y2="10"/>
+            <line x1="10" y1="10" x2="10.01" y2="10"/>
+            <line x1="14" y1="10" x2="14.01" y2="10"/>
+            <line x1="18" y1="10" x2="18.01" y2="10"/>
+            <line x1="7" y1="14" x2="17" y2="14"/>
+          </svg>
+        </button>
+        <button class="mode-btn" data-mode="github" aria-label="Add GitHub repo" title="Add GitHub repo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56 0-.27-.01-1.01-.02-1.99-3.2.69-3.87-1.54-3.87-1.54-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.69 1.24 3.34.95.1-.74.4-1.24.72-1.53-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.45.11-3.03 0 0 .96-.31 3.15 1.18a10.97 10.97 0 0 1 5.74 0c2.18-1.49 3.15-1.18 3.15-1.18.62 1.58.23 2.74.11 3.03.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.41-5.26 5.69.41.36.78 1.07.78 2.16 0 1.56-.01 2.81-.01 3.19 0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/>
+          </svg>
+        </button>
+        <button class="mode-btn" data-mode="file" aria-label="Drop markdown files" title="Drop markdown files">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </button>
+      </div>
       <div id="status-pill">
         <span id="status-dot"></span>
         <span id="status">ready</span>
       </div>
-      <button id="mic-btn" aria-label="Toggle microphone">
-        <div class="mic-rings">
-          <span class="ring ring-1"></span>
-          <span class="ring ring-2"></span>
-          <span class="ring ring-3"></span>
-        </div>
-        <svg class="mic-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 1a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4Z"/>
-          <path d="M19 10v1a7 7 0 0 1-14 0v-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-        <svg class="stop-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display:none">
-          <rect x="4" y="4" width="16" height="16" rx="3"/>
-        </svg>
-      </button>
+      <div id="focus-pill" hidden>
+        <span class="focus-arrow">↳</span>
+        <span class="focus-prefix">adding under</span>
+        <span id="focus-target"></span>
+        <button id="focus-clear" aria-label="Clear focus">×</button>
+      </div>
+      <div id="mic-area">
+        <button id="voice-btn" aria-label="Change voice" title="Change voice">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="9" cy="7" r="3"/>
+            <path d="M3 21v-1a6 6 0 0 1 12 0v1"/>
+            <path d="M16 8a4 4 0 0 1 0 8"/>
+            <path d="M19 5a8 8 0 0 1 0 14"/>
+          </svg>
+        </button>
+        <button id="mic-btn" aria-label="Toggle microphone">
+          <div class="mic-rings">
+            <span class="ring ring-1"></span>
+            <span class="ring ring-2"></span>
+            <span class="ring ring-3"></span>
+          </div>
+          <svg class="mic-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4Z"/>
+            <path d="M19 10v1a7 7 0 0 1-14 0v-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <svg class="stop-icon" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+            <rect x="4" y="4" width="16" height="16" rx="3"/>
+          </svg>
+        </button>
+      </div>
       <form id="text-input-form" hidden>
         <input id="text-input" type="text" placeholder="Type to add to your graph…" autocomplete="off" autocapitalize="sentences" />
         <button type="submit" aria-label="Send">
@@ -65,26 +137,44 @@
           </svg>
         </button>
       </form>
+      <form id="github-input-form" hidden>
+        <input id="github-input" type="text" placeholder="paste github repo url…" autocomplete="off" spellcheck="false" />
+        <button type="submit" aria-label="Clone repo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"/>
+            <polyline points="12 5 19 12 12 19"/>
+          </svg>
+        </button>
+      </form>
+      <div id="drop-zone" role="button" tabindex="0" aria-label="Drop .md files here" hidden>
+        <svg class="drop-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span class="drop-text">drop .md files or click to browse</span>
+      </div>
     </div>
 
-    <div id="drop-zone" role="button" tabindex="0" aria-label="Drop .md files here">
-      <svg class="drop-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-        <polyline points="17 8 12 3 7 8"/>
-        <line x1="12" y1="3" x2="12" y2="15"/>
-      </svg>
-      <span class="drop-text">.md only</span>
-    </div>
     <input id="md-input" type="file" accept=".md,text/markdown" hidden />
 
-    <button id="peers-btn" aria-label="Manage peers">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-        <circle cx="9" cy="7" r="4"/>
-        <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-        <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-      </svg>
-    </button>
+    <div id="edge-controls">
+      <button id="peers-btn" aria-label="Manage peers">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+      </button>
+      <button id="info-btn" aria-label="How it works">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+      </button>
+    </div>
     <div id="peers-panel" hidden>
       <h3>Peers &amp; sharing</h3>
       <div class="peers-did-section">
@@ -99,37 +189,6 @@
       <div class="peers-hint">Right-click any node in the graph to share it.</div>
     </div>
 
-    <button id="input-mode-btn" aria-label="Switch to text input" title="Switch to text input">
-      <svg class="mode-icon-keyboard" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2" y="6" width="20" height="12" rx="2"/>
-        <line x1="6" y1="10" x2="6.01" y2="10"/>
-        <line x1="10" y1="10" x2="10.01" y2="10"/>
-        <line x1="14" y1="10" x2="14.01" y2="10"/>
-        <line x1="18" y1="10" x2="18.01" y2="10"/>
-        <line x1="7" y1="14" x2="17" y2="14"/>
-      </svg>
-      <svg class="mode-icon-mic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-        <line x1="12" y1="19" x2="12" y2="23"/>
-        <line x1="8" y1="23" x2="16" y2="23"/>
-      </svg>
-    </button>
-    <button id="info-btn" aria-label="How it works">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="12" y1="16" x2="12" y2="12"/>
-        <line x1="12" y1="8" x2="12.01" y2="8"/>
-      </svg>
-    </button>
-    <button id="voice-btn" aria-label="Change voice">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-        <line x1="12" y1="19" x2="12" y2="23"/>
-        <line x1="8" y1="23" x2="16" y2="23"/>
-      </svg>
-    </button>
     <div id="voice-modal" class="modal" hidden>
       <div class="modal-content">
         <div class="modal-header">
@@ -140,7 +199,7 @@
       </div>
     </div>
     <div id="info-panel" hidden>
-      <p><strong>PHAROS — Voice to Knowledge Graph</strong></p>
+      <p><strong>Voice to Knowledge Graph</strong></p>
       <p>Speak naturally. Every concept is resolved against the canonical identity graph using the CubeCodex three-test law.</p>
       <p><strong>Identity outcomes</strong></p>
       <ul>
@@ -165,6 +224,20 @@
     </div>
 
     <div id="toast" hidden></div>
+
+    <div id="add-node-popover" hidden>
+      <div class="add-node-arrow"></div>
+      <form id="add-node-form" autocomplete="off">
+        <input id="add-node-name" type="text" placeholder="node name" maxlength="80" required />
+        <div class="add-node-label">connect to</div>
+        <div id="add-node-connections" class="add-node-connections" role="listbox" aria-multiselectable="true"></div>
+        <div class="add-node-hint">first selected becomes the parent</div>
+        <div class="add-node-actions">
+          <button type="button" data-action="cancel" class="p2p-btn-secondary">cancel</button>
+          <button type="submit" class="p2p-btn-primary">save</button>
+        </div>
+      </form>
+    </div>
 
     <script type="module" src="js/main.js"></script>
   </body>
