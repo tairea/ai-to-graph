@@ -2,10 +2,27 @@ import Anthropic from '@anthropic-ai/sdk';
 import { buildPHAROSSystemPrompt, ingestToolSchema } from './pharos-prompt.js';
 import * as store from './pharos-store.js';
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const RESOLVE_MODEL = process.env.RESOLVE_MODEL || 'claude-sonnet-4-6';
+// OpenRouter exposes Claude via the Anthropic SDK if you point baseURL at
+// https://openrouter.ai/api/v1 — model names are namespaced "anthropic/…".
+const OPENROUTER_MODEL = process.env.OPENROUTER_RESOLVE_MODEL || `anthropic/${RESOLVE_MODEL}`;
+const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
-export async function resolve(transcript, assistantPrior, contextId, focusedParentId) {
+function buildClient({ anthropicKey, openrouterKey }) {
+  if (anthropicKey) {
+    return { client: new Anthropic({ apiKey: anthropicKey }), model: RESOLVE_MODEL };
+  }
+  if (openrouterKey) {
+    return {
+      client: new Anthropic({ apiKey: openrouterKey, baseURL: OPENROUTER_BASE }),
+      model: OPENROUTER_MODEL,
+    };
+  }
+  throw new Error('No Anthropic or OpenRouter key available');
+}
+
+export async function resolve(transcript, assistantPrior, contextId, focusedParentId, keys = {}) {
+  const { client, model } = buildClient(keys);
   const existingNodes = store.getStoreSummary();
   const systemPrompt = buildPHAROSSystemPrompt(existingNodes);
 
@@ -14,7 +31,7 @@ export async function resolve(transcript, assistantPrior, contextId, focusedPare
     : `User said: "${transcript}"\n\nResolve this utterance against the PHAROS graph.`;
 
   const response = await client.messages.create({
-    model: RESOLVE_MODEL,
+    model,
     max_tokens: 4096,
     system: [
       {

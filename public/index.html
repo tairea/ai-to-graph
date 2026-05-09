@@ -159,6 +159,11 @@
     <input id="md-input" type="file" accept=".md,text/markdown" hidden />
 
     <div id="edge-controls">
+      <button id="keys-btn" aria-label="Set API keys" title="API keys">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+        </svg>
+      </button>
       <button id="peers-btn" aria-label="Manage peers">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -187,6 +192,35 @@
         <button id="peer-add-btn" class="peer-add-btn">+ Add peer</button>
       </div>
       <div class="peers-hint">Right-click any node in the graph to share it.</div>
+    </div>
+
+    <div id="keys-panel" hidden>
+      <h3>API keys</h3>
+      <form id="keys-form" autocomplete="off">
+        <div class="key-field">
+          <label for="key-openai">OpenAI</label>
+          <p class="key-desc">Powers the realtime voice model (gpt-realtime-mini) used for live transcription and assistant turns.</p>
+          <input id="key-openai" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+          <span class="key-status" id="key-openai-status"></span>
+        </div>
+        <div class="key-field">
+          <label for="key-anthropic">Anthropic</label>
+          <p class="key-desc">Resolves utterances against the knowledge graph (Claude Sonnet) — every voice/text/markdown ingest.</p>
+          <input id="key-anthropic" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" />
+          <span class="key-status" id="key-anthropic-status"></span>
+        </div>
+        <div class="key-field">
+          <label for="key-openrouter">OpenRouter <span class="key-tag">fallback</span></label>
+          <p class="key-desc">If the Anthropic field is empty, ingest is routed through OpenRouter using its Anthropic-compatible endpoint. (Realtime voice still requires a direct OpenAI key.)</p>
+          <input id="key-openrouter" type="password" placeholder="sk-or-…" autocomplete="off" spellcheck="false" />
+          <span class="key-status" id="key-openrouter-status"></span>
+        </div>
+        <div class="keys-actions">
+          <button type="button" class="p2p-btn-secondary" data-action="cancel">cancel</button>
+          <button type="submit" class="p2p-btn-primary">save</button>
+        </div>
+      </form>
+      <div class="keys-hint">Stored encrypted on Gun under your DID + cached locally on this server.</div>
     </div>
 
     <div id="voice-modal" class="modal" hidden>

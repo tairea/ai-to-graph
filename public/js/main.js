@@ -30,6 +30,16 @@ const peersPanel = document.getElementById('peers-panel');
 const peersList = document.getElementById('peers-list');
 const peersDidBadge = document.getElementById('peers-did');
 const peerAddBtn = document.getElementById('peer-add-btn');
+const keysBtn = document.getElementById('keys-btn');
+const keysPanel = document.getElementById('keys-panel');
+const keysForm = document.getElementById('keys-form');
+const keyOpenaiInput = document.getElementById('key-openai');
+const keyAnthropicInput = document.getElementById('key-anthropic');
+const keyOpenrouterInput = document.getElementById('key-openrouter');
+const keyOpenaiStatus = document.getElementById('key-openai-status');
+const keyAnthropicStatus = document.getElementById('key-anthropic-status');
+const keyOpenrouterStatus = document.getElementById('key-openrouter-status');
+const keysCancelBtn = keysPanel?.querySelector('[data-action="cancel"]');
 const processingPill = document.getElementById('processing-pill');
 const modeRow = document.getElementById('mode-row');
 const modeButtons = modeRow ? Array.from(modeRow.querySelectorAll('.mode-btn')) : [];
@@ -88,14 +98,26 @@ function closeVoiceModal() {
   voiceBtn.setAttribute('aria-expanded', 'false');
 }
 
+function closeOtherPanels(except) {
+  if (except !== 'info' && infoPanel && !infoPanel.hidden) {
+    infoPanel.hidden = true;
+    infoBtn?.setAttribute('aria-expanded', 'false');
+  }
+  if (except !== 'peers' && peersPanel && !peersPanel.hidden) {
+    peersPanel.hidden = true;
+    peersBtn?.setAttribute('aria-expanded', 'false');
+  }
+  if (except !== 'keys' && keysPanel && !keysPanel.hidden) {
+    keysPanel.hidden = true;
+    keysBtn?.setAttribute('aria-expanded', 'false');
+  }
+}
+
 infoBtn.addEventListener('click', () => {
   const willOpen = infoPanel.hidden;
   infoPanel.hidden = !willOpen;
   infoBtn.setAttribute('aria-expanded', willOpen);
-  if (willOpen && peersPanel && !peersPanel.hidden) {
-    peersPanel.hidden = true;
-    peersBtn?.setAttribute('aria-expanded', 'false');
-  }
+  if (willOpen) closeOtherPanels('info');
 });
 
 voiceBtn.addEventListener('click', () => {
@@ -602,15 +624,100 @@ if (peersBtn && peersPanel) {
     peersPanel.hidden = !willOpen;
     peersBtn.setAttribute('aria-expanded', willOpen);
     if (willOpen) {
-      if (infoPanel && !infoPanel.hidden) {
-        infoPanel.hidden = true;
-        infoBtn?.setAttribute('aria-expanded', 'false');
-      }
+      closeOtherPanels('peers');
       const peers = await loadPeers();
       renderPeerList(peers);
     }
   });
 }
+
+// ─── API keys panel ─────────────────────────────────────────────────────────
+
+function setKeyStatus(el, status) {
+  if (!el || !status) return;
+  el.className = 'key-status';
+  if (status.source === 'stored') {
+    el.classList.add('is-set');
+    el.textContent = `saved · ${status.masked}`;
+  } else if (status.source === 'env') {
+    el.classList.add('is-env');
+    el.textContent = `env · ${status.masked}`;
+  } else {
+    el.textContent = 'not set';
+  }
+}
+
+async function loadKeysStatus() {
+  try {
+    const res = await fetch('ingest/keys');
+    if (!res.ok) return;
+    const data = await res.json();
+    setKeyStatus(keyOpenaiStatus, data.openai);
+    setKeyStatus(keyAnthropicStatus, data.anthropic);
+    setKeyStatus(keyOpenrouterStatus, data.openrouter);
+    if (keyOpenaiInput) keyOpenaiInput.value = '';
+    if (keyAnthropicInput) keyAnthropicInput.value = '';
+    if (keyOpenrouterInput) keyOpenrouterInput.value = '';
+  } catch (err) {
+    console.warn('[keys] load failed', err);
+  }
+}
+
+if (keysBtn && keysPanel) {
+  keysBtn.addEventListener('click', async () => {
+    const willOpen = keysPanel.hidden;
+    keysPanel.hidden = !willOpen;
+    keysBtn.setAttribute('aria-expanded', willOpen);
+    if (willOpen) {
+      closeOtherPanels('keys');
+      await loadKeysStatus();
+    }
+  });
+}
+
+keysCancelBtn?.addEventListener('click', () => {
+  if (!keysPanel) return;
+  keysPanel.hidden = true;
+  keysBtn?.setAttribute('aria-expanded', 'false');
+});
+
+keysForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const patch = {};
+  if (keyOpenaiInput?.value.trim())     patch.openai     = keyOpenaiInput.value.trim();
+  if (keyAnthropicInput?.value.trim())  patch.anthropic  = keyAnthropicInput.value.trim();
+  if (keyOpenrouterInput?.value.trim()) patch.openrouter = keyOpenrouterInput.value.trim();
+  if (Object.keys(patch).length === 0) {
+    showToast('No changes to save', 'error');
+    return;
+  }
+  try {
+    const res = await fetch('ingest/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      showToast('Save failed: ' + (await res.text()).slice(0, 140), 'error');
+      return;
+    }
+    const data = await res.json();
+    setKeyStatus(keyOpenaiStatus, data.openai);
+    setKeyStatus(keyAnthropicStatus, data.anthropic);
+    setKeyStatus(keyOpenrouterStatus, data.openrouter);
+    if (keyOpenaiInput) keyOpenaiInput.value = '';
+    if (keyAnthropicInput) keyAnthropicInput.value = '';
+    if (keyOpenrouterInput) keyOpenrouterInput.value = '';
+    if (keysPanel) {
+      keysPanel.hidden = true;
+      keysBtn?.setAttribute('aria-expanded', 'false');
+    }
+    showToast('Keys saved', 'success');
+  } catch (err) {
+    console.error('[keys] save error', err);
+    showToast('Save failed: ' + err.message, 'error');
+  }
+});
 
 if (peersDidBadge) {
   peersDidBadge.addEventListener('click', () => {

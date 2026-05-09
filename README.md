@@ -1,138 +1,162 @@
-# PHAROS — voice-to-graph
+# voice-to-graph
 
-Have a natural voice conversation, and watch your ideas resolve themselves
-into a live 3D **knowledge graph** anchored to your avatar. Every concept
-is reconciled against an identity-aware store (PHAROS) that decides whether
-the utterance is a *new* idea, *related* to an existing one, the *same*
-idea expressed differently, or in *conflict* with something already there.
+A collaborative graph workspace prototype. Speak, type, drop a markdown
+file, paste a GitHub repo, or click an empty patch of canvas — every
+input becomes nodes and edges in a live 3D knowledge graph anchored to
+your avatar.
 
-Each graph can be selectively shared with another PHAROS instance —
-publicly (visible to anyone running PHAROS), to a specific peer
-(end-to-end encrypted), or to anyone who has exchanged DIDs with you.
-Sharing rides a hosted **Gun.js** relay that every instance joins by
-default — `npm start` is all you need.
+Offline-first. Each instance runs locally and persists to disk. Subtrees
+sync peer-to-peer over **Gun.js** — publicly, end-to-end encrypted to a
+specific recipient, or linked to your DID for anyone who has added you.
 
 ---
 
-## Architecture at a glance
+## What it does
 
-```
-        Browser (3D force graph + voice)
-                     │
-                     ▼
-   ┌──────────────── server.js ────────────────┐
-   │  /session         OpenAI Realtime ticket   │
-   │  /ingest          PHAROS resolver          │
-   │  /ingest/share    publish subtree          │
-   │  /ingest/peers    peer CRUD                │
-   │  /ingest/events   SSE for remote shares    │
-   └────────┬──────────────────────┬────────────┘
-            │                      │
-            ▼                      ▼
-     pharos-store.js          gun-store.js
-   in-mem + JSON file       Gun graph + SEA DID
-   (canonical state)        (network sync layer)
-                                   │
-                                   ▼
-                        Gun relay (deploy/gun-relay)
-                        WebSocket on :8765
-                                   │
-                                   ▼
-                          other PHAROS instances
-```
-
-**Two layers of storage on purpose**: the in-memory + JSON file is the
-canonical state — fast, synchronous, durable across restarts. Gun is the
-network sync layer — every write mirrors into a Gun graph that another
-peer (over a relay) can subscribe to.
+- **Voice** — speak naturally; transcripts resolve into the graph via Claude
+- **Text** — type to add concepts the same way
+- **Markdown** — drop `.md` files to bulk-ingest documents
+- **GitHub repo** — paste a URL to graph the file/folder structure as a DAG
+  (deterministic, no LLM tokens; tiered cap with a "continue" toast)
+- **Manual node** — click empty canvas to drop a node and pick its connections
+- **Click-to-focus** — clicking any node makes it the parent for the next ingest
+- **P2P sharing** — public spaces, encrypted shares, avatar-linked subtrees;
+  remote nodes render in gold
 
 ---
 
-## Project elements
+## Architecture
+
+```
+       Browser (3D force graph + voice)
+                    │
+                    ▼
+   ┌──────────── server.js ───────────┐
+   │  /session         OpenAI session  │
+   │  /ingest          resolver        │
+   │  /ingest/node     manual add      │
+   │  /ingest/github   repo ingest     │
+   │  /ingest/keys     API keys        │
+   │  /ingest/share    publish subtree │
+   │  /ingest/peers    peer CRUD       │
+   │  /ingest/events   SSE             │
+   └──────┬─────────────────┬──────────┘
+          │                 │
+          ▼                 ▼
+   pharos-store.js    gun-store.js
+   in-mem + JSON      Gun graph + SEA DID
+   (canonical)        (network sync)
+                            │
+                            ▼
+                    Gun relay (deploy/gun-relay)
+                            │
+                            ▼
+                       other instances
+```
+
+Two storage layers on purpose: a synchronous JSON file is the canonical
+state (durable, fast, restart-safe). Gun mirrors every write so peers
+can subscribe over a relay. Because Gun is offline-first, peers can
+mutate while disconnected and converge when the relay is reachable again.
+
+---
+
+## Project layout
 
 ### Backend
 
 | File | Role |
 |---|---|
-| `server.js` | Express endpoints: `/session`, `/ingest`, `/ingest/state`, `/ingest/identity`, `/ingest/share`, `/ingest/peers`, `/ingest/events`, plus the legacy `/extract` shim. |
-| `pharos-resolver.js` | Calls Anthropic (`claude-sonnet-4-6` by default) with the PHAROS prompt + `pharos_ingest` tool. Maps each `outcome` (`new` / `related` / `same` / `conflicting`) onto store mutations. |
-| `pharos-prompt.js` | The CubeCodex system prompt — six cube faces, predicate selection rules, ingest tool schema. |
-| `pharos-store.js` | In-memory Map+Array with synchronous JSON-file persistence (`pharos-data.json`). Houses nodes, claims, contexts, branch codes, public spaces, peers. Mirrors every write into Gun and exposes the sharing API (`makePublic`, `shareWithSpecific`, `linkToAvatar`, `subscribeToInbox`, etc.). |
-| `gun-store.js` | Gun graph init, persistent SEA keypair (`data/identity.json`), path helpers, remote event emitter consumed by SSE. |
+| `server.js` | Express endpoints + GitHub clone/walk |
+| `pharos-resolver.js` | Anthropic SDK call (or OpenRouter fallback) with the ingest tool |
+| `pharos-prompt.js` | System prompt + `pharos_ingest` tool schema |
+| `pharos-store.js` | Canonical store (in-mem Maps + JSON file), Gun mirror, sharing API |
+| `keys-store.js` | API keys: encrypted on Gun, cached locally |
+| `gun-store.js` | Gun init, persistent SEA keypair, path helpers, remote event emitter |
 
 ### Frontend (`public/`)
 
 | File | Role |
 |---|---|
-| `index.html` | Mic button, drop zone, info / voice / peers panels, modal scaffolding. |
-| `style.css` | Visual language: cobalt panels, gold for shared/synthesized, predicate-coloured edges. |
-| `js/realtime.js` | WebRTC session with `gpt-realtime-mini`; surfaces user transcripts and assistant prior turns. |
-| `js/graph.js` | 3D force graph; node/edge rendering by resonance + predicate; gold halo for shared subtrees; right-click hook. |
-| `js/main.js` | Wires transcripts → `/ingest`; SSE subscription for remote shares; right-click context menu; share / peer-add modals; DID badge with click-to-copy. |
-| `js/avatar.js` | Avatar upload + localStorage persistence; rendered as a circular sprite at the root `me` node. |
+| `index.html` | Welcome overlay, mode row, mic, drop zone, modals |
+| `style.css` | Dark cobalt UI; gold for shared/synthesized; predicate-coloured edges |
+| `js/main.js` | Mode switching, ingest, focus tracking, panel handlers |
+| `js/graph.js` | 3D force graph, node sprites, file-type icons, focus halo |
+| `js/realtime.js` | WebRTC session with `gpt-realtime-mini` |
+| `js/avatar.js`, `js/user.js` | Avatar + username persistence |
 
 ### Deploy (`deploy/`)
 
 | File | Role |
 |---|---|
-| `Dockerfile.pharos` | Production image of the backend. |
-| `gun-relay/Dockerfile` + `relay.js` | Tiny Gun WebSocket relay container, port 8765, persists via radisk. |
-| `docker-compose.yml` | Local stack: `pharos` + `gun-relay` with shared volumes. |
-| `README.md` | Local-stack and VPS instructions. |
+| `Dockerfile.pharos` | Backend image |
+| `gun-relay/` | Tiny Gun WebSocket relay container |
+| `docker-compose.yml` | Local stack |
 
 ### Runtime data (`data/`, gitignored)
 
 | File | Role |
 |---|---|
-| `data/identity.json` | SEA keypair → stable `did:gun:<pub>` identity for this instance. |
-| `data/gun/` | Gun radisk store (network sync state). |
-| `pharos-data.json` | Canonical local store: nodes, claims, contexts, codeMap, peers, public spaces. |
+| `data/identity.json` | SEA keypair → stable `did:gun:<pub>` |
+| `data/keys.json` | API keys cache |
+| `data/gun/` | Gun radisk store |
+| `pharos-data.json` | Canonical local store |
 
 ---
 
-## How a voice utterance becomes a node
+## How an utterance becomes a node
 
-1. `realtime.js` connects WebRTC to OpenAI Realtime, captures the
-   user's transcript and the assistant's prior reply.
-2. `main.js` POSTs to `/ingest` with `{ transcript, assistantPrior }`.
-3. `server.js` creates a context, then calls `pharosResolve` (Anthropic
-   with the `pharos_ingest` tool).
-4. The resolver picks one of four outcomes per concept:
-   - **new** → `addNode` + `assignCode` (allocates a branch letter and a
-     new `A1`-style code)
+1. `realtime.js` captures the transcript.
+2. `main.js` POSTs to `/ingest` with `{ transcript, focusedParentId }`.
+3. `pharos-resolver.js` calls Claude (Anthropic key direct, or via OpenRouter
+   if only that key is set) using the `pharos_ingest` tool.
+4. Per concept the resolver picks one outcome:
+   - **new** → `addNode` + `assignCode` (`A1`-style code on a branch letter)
    - **related** → `addClaim` with a typed predicate (`EXPRESSES`,
-     `EMERGES_FROM`, `OPERATIONALIZES`, …) selected by **cube face**
+     `EMERGES_FROM`, `OPERATIONALIZES`, `CONTRADICTS`, …)
    - **same** → `incrementExpression` on the existing node
    - **conflicting** → `addClaim` with `CONTRADICTS`; both endpoints get
      a red halo
-5. The store persists to JSON, mirrors to Gun, and replies to the
-   browser, which adds the node/edge to the 3D graph.
+5. Each node persists locally, mirrors to Gun, and renders in the graph.
 
-Voice editing commands (`"move B4 to A2"`, `"remove C3"`) flow through the
-same path and emerge as `operations` that the frontend applies via
-`graph.moveNode` / `graph.removeNode`.
+`focusedParentId` (set by clicking a node) overrides any `parent_id: 'me'`
+the resolver returns, so new concepts branch off whatever's focused.
+Voice editing commands like `"move B4 to A2"` and `"remove C3"` flow the
+same way and emerge as `operations` the frontend applies via
+`graph.moveNode` / `removeNode`.
 
 ---
 
 ## P2P subtree sharing
 
-Right-click any node in the graph to choose:
+Right-click any node:
 
 | Mode | Where it goes | Who sees it |
 |---|---|---|
 | 🌐 **Make public** | `pharos>public>{spaceId}>graph` | anyone subscribed to the public index |
-| 🔐 **Share with…** | `pharos>inbox>{recipientDID}>{spaceId}>graph` (encrypted with `SEA.secret(senderDID, recipientDID)`) | the named recipient only |
+| 🔐 **Share with…** | `pharos>inbox>{recipientDID}>{spaceId}>graph` (encrypted) | the named recipient only |
 | 🔗 **Link to my avatar** | `pharos>users>{yourDID}>shared` | every peer who has added your DID |
 
-A **DID** is generated from a SEA keypair on first run and cached in
-`data/identity.json`. The peers panel shows your DID for click-to-copy
-exchange. After you and Sam paste each other's DIDs, both instances
-auto-subscribe to each other's avatar-shared subtree.
+A DID (`did:gun:<pub>`) is generated from a SEA keypair on first run.
+Open the share panel to copy yours; paste a peer's DID to subscribe to
+their avatar-shared subtree. Encrypted shares use
+`SEA.secret(theirDID, ourPair)` to derive a symmetric key both peers
+compute without exchanging it. The relay does no auth — confidentiality
+lives in SEA encryption.
 
-Remote nodes/edges arrive over the Gun graph, fan out through the
-backend `EventEmitter`, ride the **`/ingest/events` SSE** stream to every
-connected browser, and render in **gold** with a "shared from <DID>"
-tooltip badge.
+---
+
+## API keys
+
+Click the key icon (top of the right edge) to enter:
+
+- **OpenAI** — required for the realtime voice model
+- **Anthropic** — used by the resolver for every ingest
+- **OpenRouter** — fallback for ingest when no Anthropic key is set
+
+Keys are stored encrypted on Gun under your DID (so they survive restarts)
+and cached in `data/keys.json`. Env vars (`OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`) are a last-resort fallback.
 
 ---
 
@@ -141,14 +165,16 @@ tooltip badge.
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/session` | OpenAI Realtime ephemeral client secret |
-| `POST` | `/ingest` | Resolve transcript via PHAROS, returns `{ results, operations }` |
-| `GET` | `/ingest/state` | Current store: nodes, claims, identity, peers, publicSpaces |
-| `GET` | `/ingest/identity` | This instance's DID + name |
-| `POST` | `/ingest/share` | `{ nodeId, mode: 'public' \| 'specific' \| 'avatar', recipientDID? }` |
+| `POST` | `/ingest` | Resolve transcript |
+| `POST` | `/ingest/node` | Manually create a node + connections |
+| `POST` | `/ingest/github` | Clone a repo, graph its file/folder DAG |
+| `DELETE` | `/ingest/node/:id` | Remove a node + subtree |
+| `GET` | `/ingest/state` | Current store snapshot |
+| `GET` | `/ingest/identity` | This instance's DID |
+| `GET` / `POST` | `/ingest/keys` | Get masked / save API keys |
+| `POST` | `/ingest/share` | Publish a subtree (`public` / `specific` / `avatar`) |
 | `DELETE` | `/ingest/share/:spaceId` | Tombstone a public share |
-| `GET` | `/ingest/peers` | List known peers |
-| `POST` | `/ingest/peers` | Add a peer `{ did, name?, relayAddress? }` |
-| `DELETE` | `/ingest/peers/:did` | Remove a peer |
+| `GET` / `POST` / `DELETE` | `/ingest/peers[/:did]` | Peer CRUD |
 | `GET` | `/ingest/events` | SSE stream of remote shared nodes/claims |
 
 ---
@@ -156,44 +182,40 @@ tooltip badge.
 ## Environment
 
 ```
-OPENAI_API_KEY=sk-...                # required (Realtime + extract shim)
-ANTHROPIC_API_KEY=sk-ant-...         # required (PHAROS resolver)
+OPENAI_API_KEY=sk-...                # optional if entered in UI
+ANTHROPIC_API_KEY=sk-ant-...         # optional if entered in UI
+OPENROUTER_API_KEY=sk-or-...         # optional fallback
 PORT=3002                            # default port
-GUN_RELAY_URL=https://experiments.sunriselabs.io/gun  # shared relay (default); set to your own for self-hosting
-PHAROS_NAME=Ian                      # optional friendly name in the profile
+GUN_RELAY_URL=https://experiments.sunriselabs.io/gun  # shared relay; empty = offline
 RESOLVE_MODEL=claude-sonnet-4-6      # optional override
-EXTRACT_MODEL=gpt-4.1-mini           # optional override
 ```
 
 ---
 
-## Quick start (local)
+## Quick start
 
-Requires Node ≥18.
+Requires Node ≥18 and `git` on PATH (for repo ingest).
 
 ```bash
 git clone https://github.com/tairea/voice-to-graph.git
 cd voice-to-graph
 npm install
-
-cp .env.example .env
-# then edit .env and fill in your OPENAI_API_KEY and ANTHROPIC_API_KEY
-
+cp .env.example .env  # optional — keys can also be entered in the UI
 npm start
 ```
 
-Open http://localhost:3002, upload an avatar, click the mic, and start
-talking. Drop a `.md` file on the bottom-left target to ingest a
-document instead.
+Open http://localhost:3002, enter your name, optionally upload an avatar,
+paste your API keys via the key icon, then start talking / typing /
+dropping files / pasting repo URLs.
 
-By default your instance joins the shared Gun relay at
-`https://experiments.sunriselabs.io/gun`, so subtree shares converge
-with anyone else running the app. To run **fully offline** (no P2P
-sharing) set `GUN_RELAY_URL=` (empty) in `.env`. To **self-host the
-relay** instead, run `cd deploy/gun-relay && npm install && node relay.js`
-in another terminal and set `GUN_RELAY_URL=http://localhost:8765/gun`.
+To run **fully offline** (no P2P sharing) set `GUN_RELAY_URL=` (empty).
+To **self-host the relay**, run `cd deploy/gun-relay && npm install &&
+node relay.js` in another terminal and set
+`GUN_RELAY_URL=http://localhost:8765/gun`.
 
-## Live deployment on this host
+---
+
+## Live deployment
 
 The live instance runs under PM2:
 
@@ -206,30 +228,3 @@ pm2 list
 Front-ended by nginx at https://experiments.sunriselabs.io/voice-to-graph/
 with `proxy_buffering off` for the SSE stream. Restart with
 `pm2 restart voice-to-graph --update-env` after changing `.env`.
-
----
-
-## Voice command examples
-
-- *"I want to research legends from the Cook Islands"* → `A1: Cook Islands → A2: Legends`
-- *"I also play guitar"* → starts a new branch `B1: Guitar`
-- *"Move B1 to A1"* → re-parents the Guitar subtree under Cook Islands and recodes it
-- *"Delete A2"* → removes the Legends subtree
-- Right-click `A1` → *"Make public"* → Cook Islands subtree turns gold and is now visible to any peer subscribed to the public index
-
----
-
-## Sharing protocol details (for the curious)
-
-- DIDs are derived from a SEA keypair: `did:gun:<pub>`. The keypair lives
-  in `data/identity.json` (gitignored).
-- Specific-recipient encryption uses `SEA.secret(otherDID, ourPair)` to
-  derive a symmetric key — both peers compute the same key without ever
-  exchanging it.
-- Public-space metadata (`pharos>publicSpaces>{spaceId}`) lets any
-  subscribed peer discover and watch new spaces.
-- The relay does **no auth** — it's a dumb message-pass over WebSocket.
-  All confidentiality lives in SEA encryption for inbox shares;
-  public/avatar modes are intentionally open.
-- Because Gun is offline-first, both peers can mutate while disconnected
-  and converge when the relay is reachable again.

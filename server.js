@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import * as store from './pharos-store.js';
+import * as keys from './keys-store.js';
 import { resolve as pharosResolve } from './pharos-resolver.js';
 
 const execFile = promisify(_execFile);
@@ -24,14 +25,15 @@ const EXTRACT_MODEL = process.env.EXTRACT_MODEL || 'gpt-4.1-mini';
 // ─── /session — OpenAI Realtime (unchanged) ──────────────────────────────────
 
 app.post('/session', async (_req, res) => {
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(500).json({ error: 'OPENAI_API_KEY is not set on the server' });
+  const openaiKey = keys.getKey('openai');
+  if (!openaiKey) {
+    return res.status(500).json({ error: 'OpenAI key not set. Add it under the key icon (OpenRouter does not support the realtime API).' });
   }
   try {
     const upstream = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${openaiKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ session: { type: 'realtime', model: REALTIME_MODEL } })
@@ -46,8 +48,10 @@ app.post('/session', async (_req, res) => {
 // ─── /ingest — PHAROS CubeCodex identity resolution ──────────────────────────
 
 app.post('/ingest', async (req, res) => {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not set on the server' });
+  const anthropicKey = keys.getKey('anthropic');
+  const openrouterKey = keys.getKey('openrouter');
+  if (!anthropicKey && !openrouterKey) {
+    return res.status(500).json({ error: 'Anthropic key not set (and no OpenRouter fallback). Add one under the key icon.' });
   }
 
   const { transcript, assistantPrior, focusedParentId } = req.body || {};
@@ -67,7 +71,10 @@ app.post('/ingest', async (req, res) => {
       created: new Date().toISOString()
     });
 
-    const result = await pharosResolve(transcript, assistantPrior || '', contextId, focusedParentId);
+    const result = await pharosResolve(transcript, assistantPrior || '', contextId, focusedParentId, {
+      anthropicKey,
+      openrouterKey,
+    });
     res.json({ context_id: contextId, ...result });
   } catch (err) {
     console.error('[ingest] error', err);
@@ -91,6 +98,28 @@ app.get('/ingest/state', (_req, res) => {
 
 app.get('/ingest/identity', (_req, res) => {
   res.json(store.getIdentity());
+});
+
+// ─── /ingest/keys — manage stored API keys (encrypted on Gun) ────────────────
+
+app.get('/ingest/keys', (_req, res) => {
+  res.json(keys.getMaskedKeys());
+});
+
+app.post('/ingest/keys', async (req, res) => {
+  try {
+    const patch = req.body || {};
+    const allowed = ['openai', 'anthropic', 'openrouter'];
+    const filtered = {};
+    for (const k of allowed) {
+      if (typeof patch[k] === 'string') filtered[k] = patch[k];
+    }
+    await keys.setKeys(filtered);
+    res.json(keys.getMaskedKeys());
+  } catch (err) {
+    console.error('[keys] save failed', err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
 });
 
 // ─── /ingest/share — make subtree public / share with peer / link to avatar ──
