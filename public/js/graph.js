@@ -19,7 +19,12 @@ let meHoverCb = null;
 let nodeRightClickCb = null;
 let backgroundClickCb = null;
 let focusChangeCb = null;
+let graphChangeCb = null;
 let focusedNodeId = 'me';
+
+function notifyGraphChange() {
+  if (graphChangeCb) graphChangeCb();
+}
 
 const AVATAR_TEXTURE_SIZE = 256;
 const AVATAR_SPRITE_SIZE = 28;
@@ -860,6 +865,7 @@ export function addPharosNode({ node, parentId, sharedSpaceId, ownerDid }) {
   graph.graphData(data);
   lastNodeId = node.id;
   scheduleFit();
+  notifyGraphChange();
   console.log(`[graph] +node ${code}: ${node.canonical_name}${sharedSpace ? ' [shared:' + sharedSpace + ']' : ''}`);
 }
 
@@ -900,6 +906,7 @@ export function addPharosClaim(claim) {
   });
 
   graph.graphData(data);
+  notifyGraphChange();
   console.log(`[graph] +claim ${claim.subject_node} —[${claim.predicate}]→ ${claim.object_node}`);
 }
 
@@ -946,6 +953,7 @@ export function removeNode(ref) {
   graph.graphData({ nodes, links });
   if (doomed.has(lastNodeId)) lastNodeId = null;
   scheduleFit();
+  notifyGraphChange();
   console.log(`[graph] -removed ${node.code || node.id} + ${doomed.size - 1} descendants`);
   return true;
 }
@@ -986,6 +994,7 @@ export function moveNode(ref, newParentRef) {
   graph.graphData({ nodes: data.nodes, links });
   refreshNodeVisuals();
   scheduleFit();
+  notifyGraphChange();
   return true;
 }
 
@@ -999,6 +1008,10 @@ export function onNodeRightClick(cb) {
 
 export function onBackgroundClick(cb) {
   backgroundClickCb = cb;
+}
+
+export function onGraphChange(cb) {
+  graphChangeCb = cb;
 }
 
 export function onFocusChange(cb) {
@@ -1055,4 +1068,24 @@ export function listNodesForPicker() {
     code: n.code || (n.id === 'me' ? 'me' : null),
     label: n.id === 'me' ? (n.label || 'me') : (n.canonicalName || n.label || n.id),
   }));
+}
+
+export function getNeighbors(id) {
+  const data = graph.graphData();
+  let parent = null;
+  const children = [];
+  for (const l of data.links) {
+    if (l.predicate !== 'PARENT') continue;
+    if (linkEndId(l.target) === id) {
+      const pid = linkEndId(l.source);
+      parent = data.nodes.find(n => n.id === pid) || null;
+    }
+    if (linkEndId(l.source) === id) {
+      const cid = linkEndId(l.target);
+      const c = data.nodes.find(n => n.id === cid);
+      if (c) children.push(c);
+    }
+  }
+  children.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+  return { parent, firstChild: children[0] || null };
 }

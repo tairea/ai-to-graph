@@ -402,11 +402,143 @@ function updateFocusPill(node) {
   focusPill.hidden = false;
 }
 
-graph.onFocusChange(node => updateFocusPill(node));
+graph.onFocusChange(node => {
+  updateFocusPill(node);
+  updateFocusChain(node?.id || 'me');
+});
 
 focusClearBtn?.addEventListener('click', () => {
   graph.setFocusedNode('me');
   updateFocusPill(graph.getFocusedNode());
+  updateFocusChain('me');
+});
+
+// ─── Focus chain (parents-only vertical timeline) ───────────────────────────
+
+const focusChainEl = document.getElementById('focus-chain');
+const CHAIN_EXIT_MS = 600;
+
+function chainLabelFor(node) {
+  if (!node) return '';
+  return node.canonicalName || node.label || node.id;
+}
+
+function chainCodeFor(node) {
+  if (!node) return '';
+  if (node.id === 'me') return '✦';
+  return node.code || '·';
+}
+
+function getAncestry(focusId) {
+  if (!focusId || focusId === 'me') return [];
+  const focus = graph.getFocusedNode();
+  if (!focus || focus.id !== focusId) return [];
+  const out = [focus];
+  let cursor = focus;
+  let safety = 0;
+  while (cursor && safety++ < 200) {
+    const { parent } = graph.getNeighbors(cursor.id);
+    if (!parent || out.find(n => n.id === parent.id)) break;
+    out.unshift(parent);
+    cursor = parent;
+  }
+  return out;
+}
+
+function makeChainItem(node) {
+  const el = document.createElement('div');
+  el.className = 'chain-item is-entering';
+  el.dataset.id = node.id;
+  el.innerHTML = `
+    <div class="chain-dot-wrap"><div class="chain-dot"></div></div>
+    <div class="chain-label">
+      <span class="chain-code"></span>
+      <span class="chain-name"></span>
+    </div>
+  `;
+  el.querySelector('.chain-code').textContent = chainCodeFor(node);
+  el.querySelector('.chain-name').textContent = chainLabelFor(node);
+  return el;
+}
+
+function safeIdSelector(id) {
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(id);
+  return id.replace(/"/g, '\\"');
+}
+
+function updateFocusChain(focusId) {
+  if (!focusChainEl) return;
+  const ancestry = getAncestry(focusId);
+
+  if (ancestry.length === 0) {
+    const items = focusChainEl.querySelectorAll('.chain-item:not(.is-exiting)');
+    if (items.length === 0) {
+      focusChainEl.hidden = true;
+      return;
+    }
+    for (const el of items) el.classList.add('is-exiting');
+    setTimeout(() => {
+      focusChainEl.hidden = true;
+      focusChainEl.innerHTML = '';
+    }, CHAIN_EXIT_MS);
+    return;
+  }
+
+  focusChainEl.hidden = false;
+  const focusItemId = ancestry[ancestry.length - 1].id;
+  const topmostId   = ancestry[0].id;
+  const desired     = new Set(ancestry.map(n => n.id));
+
+  // 1. mark items not in the new ancestry for exit (fade + self-remove).
+  for (const el of focusChainEl.querySelectorAll('.chain-item:not(.is-exiting)')) {
+    if (!desired.has(el.dataset.id)) {
+      el.classList.add('is-exiting');
+      setTimeout(() => el.remove(), CHAIN_EXIT_MS);
+    }
+  }
+
+  // 2. add or update each ancestor at its new depth. The CSS transition on
+  //    `transform` (driven by --chain-depth) handles the slide automatically.
+  for (let i = 0; i < ancestry.length; i++) {
+    const node  = ancestry[i];
+    const depth = (ancestry.length - 1) - i;   // focus = 0, root = highest
+    const sel   = `.chain-item[data-id="${safeIdSelector(node.id)}"]:not(.is-exiting)`;
+    let el      = focusChainEl.querySelector(sel);
+
+    if (!el) {
+      // New item: place it at its target depth, leave is-entering on so it
+      // starts invisible. Drop is-entering on the next frame to fade it in.
+      el = makeChainItem(node);
+      el.style.setProperty('--chain-depth', String(depth));
+      focusChainEl.appendChild(el);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => el.classList.remove('is-entering'));
+      });
+    } else {
+      // Existing: just push the new depth — CSS transition slides it.
+      el.querySelector('.chain-code').textContent = chainCodeFor(node);
+      el.querySelector('.chain-name').textContent = chainLabelFor(node);
+      el.style.setProperty('--chain-depth', String(depth));
+    }
+
+    el.classList.toggle('is-focus',   node.id === focusItemId);
+    el.classList.toggle('is-topmost', node.id === topmostId);
+  }
+}
+
+focusChainEl?.addEventListener('click', e => {
+  const item = e.target.closest('.chain-item');
+  if (!item) return;
+  const id = item.dataset.id;
+  if (id) graph.setFocusedNode(id);
+});
+
+let chainRefreshTimer = null;
+graph.onGraphChange(() => {
+  clearTimeout(chainRefreshTimer);
+  chainRefreshTimer = setTimeout(() => {
+    updateFocusChain(graph.getFocusedNodeId());
+  }, 80);
 });
 
 async function ingestMdFile(text, filename) {

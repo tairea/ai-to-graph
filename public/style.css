@@ -16,6 +16,149 @@ html, body {
   inset: 0;
 }
 
+/* === focus chain (parents-only vertical timeline, non-scrollable) === */
+#focus-chain {
+  position: fixed;
+  left: 32px;
+  top: 0;
+  bottom: 0;
+  width: 240px;
+  z-index: 30;
+  pointer-events: none;
+  /* Fade everything above viewport center toward transparent so far ancestors
+     gracefully blend into the screen edge. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 50%, black 100%);
+          mask-image: linear-gradient(to bottom, transparent 0%, black 50%, black 100%);
+}
+
+#focus-chain[hidden] { display: none; }
+
+/* Items are absolutely positioned around the chain's vertical center
+   (top: 50%). Their final position is driven entirely by --chain-depth, which
+   means a depth change is a pure CSS transition on transform — smooth, no
+   measurements, no FLIP. */
+.chain-item {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateY(calc(-50% - var(--chain-depth, 0) * 80px));
+  transition:
+    transform 0.65s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity   0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+
+.chain-item.is-entering,
+.chain-item.is-exiting { opacity: 0 !important; }
+
+/* Vertical line passes THROUGH each dot (two segments meeting at the center).
+   The dot has its own opaque background and a higher z-index, so it visually
+   interrupts the line — giving a clean timeline look. */
+.chain-item::before,
+.chain-item::after {
+  content: '';
+  position: absolute;
+  left: 7.5px;
+  width: 1px;
+  background: rgba(140, 180, 255, 0.4);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.chain-item::before { top: 0;   height: 40px; }   /* item top → dot center */
+.chain-item::after  { top: 40px; bottom: 0; }     /* dot center → item bottom */
+
+/* Topmost ancestor: line stops at the dot — no segment above it. */
+.chain-item.is-topmost::before { display: none; }
+/* Focus: no segment below — chain ends here. */
+.chain-item.is-focus::after { display: none; }
+
+.chain-dot-wrap {
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.chain-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(8, 14, 28, 0.95);
+  border: 1.5px solid rgba(140, 180, 255, 0.6);
+  transition: all 0.4s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.chain-item:hover .chain-dot {
+  border-color: rgba(180, 220, 255, 0.95);
+}
+
+.chain-item.is-focus .chain-dot {
+  width: 14px;
+  height: 14px;
+  background: rgba(120, 180, 255, 0.95);
+  border-color: rgba(200, 230, 255, 1);
+  box-shadow: 0 0 14px rgba(120, 180, 255, 0.5);
+}
+
+.chain-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 300;
+  color: rgba(220, 235, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.01em;
+  transition: color 0.3s ease;
+}
+
+.chain-item:hover .chain-label {
+  color: rgba(255, 255, 255, 0.98);
+}
+
+.chain-code {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: rgba(140, 180, 230, 0.5);
+  flex-shrink: 0;
+}
+
+.chain-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chain-item.is-focus .chain-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 1);
+}
+
+.chain-item.is-focus .chain-code {
+  color: rgba(180, 220, 255, 0.78);
+}
+
+@media (max-width: 700px) {
+  #focus-chain { display: none; }
+}
+
 /* === welcome overlay === */
 #welcome-overlay {
   position: fixed;
