@@ -1,7 +1,19 @@
 import * as graph from './graph.js';
-import * as realtime from './realtime.js';
 import { setAvatarFromFile } from './avatar.js';
 import { getUserName, setUserName } from './user.js';
+
+// ─── Voice pipeline selector ─────────────────────────────────────────────────
+// 'v2'     — gpt-realtime-2 silent listener that calls graph tools directly
+// 'legacy' — original chained pipeline (gpt-realtime-mini transcript → /ingest)
+// Both modules are preloaded; the pipeline-pills UI swaps which one is active.
+// See docs/voice-pipeline.md for revert instructions.
+const PIPELINE_MODULES = {
+  legacy: await import('./realtime.legacy.js'),
+  v2:     await import('./realtime.v2.js'),
+};
+let activePipeline = localStorage.getItem('pharos-voice-pipeline') === 'legacy' ? 'legacy' : 'v2';
+let realtime = PIPELINE_MODULES[activePipeline];
+const isV2 = () => typeof realtime.pushFocusChange === 'function';
 
 const VOICES = [
   'alloy', 'ash', 'ballad', 'coral', 'echo',
@@ -217,19 +229,59 @@ async function handleTranscript({ transcript, assistantPrior }) {
   }
 }
 
+function endLiveSession() {
+  realtime.stop();
+  live = false;
+  micBtn.dataset.live = 'false';
+  setStatus('ready');
+}
+
+// ─── Pipeline pills (runtime switch) ─────────────────────────────────────────
+
+const pipelinePills = Array.from(document.querySelectorAll('.pipeline-pill'));
+
+function applyPipelineSelection(name) {
+  if (name !== 'legacy' && name !== 'v2') return;
+  if (name === activePipeline) return;
+  if (live) endLiveSession();
+  activePipeline = name;
+  realtime = PIPELINE_MODULES[name];
+  localStorage.setItem('pharos-voice-pipeline', name);
+  for (const btn of pipelinePills) {
+    const isActive = btn.dataset.pipeline === name;
+    btn.classList.toggle('is-active', isActive);
+    btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+  }
+}
+
+for (const btn of pipelinePills) {
+  const isActive = btn.dataset.pipeline === activePipeline;
+  btn.classList.toggle('is-active', isActive);
+  btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+  btn.addEventListener('click', () => applyPipelineSelection(btn.dataset.pipeline));
+}
+
 micBtn.addEventListener('click', async () => {
   if (live) {
-    realtime.stop();
-    live = false;
-    micBtn.dataset.live = 'false';
-    setStatus('ready');
+    endLiveSession();
     return;
   }
 
   micBtn.disabled = true;
   try {
     const voice = getSelectedVoice();
-    await realtime.start({ onTranscript: handleTranscript, onStatus: setStatus }, voice);
+    if (isV2()) {
+      await realtime.start({
+        onStatus: setStatus,
+        onSummary: () => {
+          // Model has spoken its closing summary — let audio tail play, then disconnect.
+          setTimeout(endLiveSession, 3000);
+        },
+        sessionId: getSessionId(),
+      }, voice);
+    } else {
+      await realtime.start({ onTranscript: handleTranscript, onStatus: setStatus }, voice);
+    }
     live = true;
     micBtn.dataset.live = 'true';
   } catch (err) {
@@ -405,6 +457,12 @@ function updateFocusPill(node) {
 graph.onFocusChange(node => {
   updateFocusPill(node);
   updateFocusChain(node?.id || 'me');
+  if (isV2() && live) {
+    realtime.pushFocusChange(
+      node?.id || 'me',
+      node ? { code: node.code || null, label: node.canonicalName || node.label || node.id } : 'me'
+    );
+  }
 });
 
 focusClearBtn?.addEventListener('click', () => {

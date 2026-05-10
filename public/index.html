@@ -128,6 +128,10 @@
             <rect x="4" y="4" width="16" height="16" rx="3"/>
           </svg>
         </button>
+        <div id="pipeline-pills" role="radiogroup" aria-label="Voice pipeline">
+          <button class="pipeline-pill" data-pipeline="legacy" type="button" role="radio" aria-checked="false" title="Transcribe → Claude with PHAROS prompt (original pipeline)"><span class="pipeline-badge pipeline-badge-custom">CUSTOM</span>Pharos pipeline</button>
+          <button class="pipeline-pill" data-pipeline="v2" type="button" role="radio" aria-checked="true" title="gpt-realtime-2 silent listener with direct tool calls"><span class="pipeline-badge">NEW</span>Realtime-2 model</button>
+        </div>
       </div>
       <form id="text-input-form" hidden>
         <input id="text-input" type="text" placeholder="Type to add to your graph…" autocomplete="off" autocapitalize="sentences" />

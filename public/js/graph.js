@@ -1325,6 +1325,15 @@ export async function startSpaceshipMode(opts = {}) {
 
   // Spawn at current view target, oriented along the camera's view direction.
   const spawnPos = controls?.target ? controls.target.clone() : new THREE.Vector3();
+  // When a node is focused the camera is zoomed in tight on it — spawning at
+  // the target hides the ship inside the node mesh. Pull the spawn halfway
+  // back toward the camera so the ship sits between camera and node, visible.
+  if (focusedNodeId && focusedNodeId !== 'me' && controls?.target) {
+    const fromCam = new THREE.Vector3().subVectors(spawnPos, camera.position);
+    if (fromCam.lengthSq() > 1e-4) {
+      spawnPos.sub(fromCam.multiplyScalar(0.5));
+    }
+  }
   ship.position.copy(spawnPos);
   const dx = spawnPos.x - camera.position.x;
   const dz = spawnPos.z - camera.position.z;
@@ -1548,7 +1557,6 @@ export function stopSpaceshipMode() {
   if (shipState.mouseMove) window.removeEventListener('mousemove', shipState.mouseMove);
   shipState.keyDown = shipState.keyUp = shipState.mouseMove = null;
 
-  const lastPos = shipState.ship?.position.clone();
   if (shipState.ship && scene) scene.remove(shipState.ship);
   shipState.ship = null;
   shipState.thrusters = null;
@@ -1567,10 +1575,12 @@ export function stopSpaceshipMode() {
   document.body.classList.remove('is-ship-mode');
 
   if (controls) {
-    if (lastPos) controls.target.copy(lastPos);
     controls.enabled = true;
     try { controls.update(); } catch {}
   }
+
+  // Frame the whole graph so the user gets oriented after exiting the ship.
+  try { graph.zoomToFit(700, 80); } catch (e) { console.warn('[ship] zoomToFit failed', e); }
 
   const onExit = shipState.onExit;
   shipState.onExit = null;

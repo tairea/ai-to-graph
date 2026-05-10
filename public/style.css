@@ -845,6 +845,72 @@ body.is-ship-mode #graph { cursor: crosshair; }
 
 #mic-area[hidden] { display: none; }
 
+/* Pipeline switcher (vertical stack of two pills, right of the mic) */
+#pipeline-pills {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  margin-left: 14px;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.pipeline-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: rgba(180, 200, 230, 0.65);
+  background: rgba(10, 16, 30, 0.55);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(120, 160, 255, 0.14);
+  border-radius: 999px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pipeline-pill:hover {
+  color: rgba(210, 225, 255, 0.95);
+  border-color: rgba(120, 160, 255, 0.32);
+  background: rgba(20, 30, 55, 0.7);
+}
+
+.pipeline-pill.is-active {
+  color: #f0f5ff;
+  border-color: rgba(140, 175, 255, 0.65);
+  background: rgba(70, 100, 200, 0.32);
+  box-shadow: 0 0 0 1px rgba(140, 175, 255, 0.25), 0 4px 14px -6px rgba(110, 150, 255, 0.45);
+}
+
+.pipeline-pill:focus-visible {
+  outline: 2px solid rgba(140, 175, 255, 0.6);
+  outline-offset: 2px;
+}
+
+.pipeline-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #050810;
+  background: linear-gradient(135deg, #8fb0ff 0%, #6f86ff 100%);
+  border-radius: 999px;
+}
+
+.pipeline-badge-custom {
+  background: linear-gradient(135deg, #ffd27a 0%, #f0a45a 100%);
+}
+
 #voice-btn {
   position: absolute;
   top: 50%;

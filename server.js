@@ -19,16 +19,27 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const REALTIME_MODEL = 'gpt-realtime-mini';
+const REALTIME_MODEL = process.env.REALTIME_MODEL || 'gpt-realtime-2';
 const EXTRACT_MODEL = process.env.EXTRACT_MODEL || 'gpt-4.1-mini';
 
-// ─── /session — OpenAI Realtime (unchanged) ──────────────────────────────────
+// ─── /session — OpenAI Realtime ──────────────────────────────────────────────
+// Returns the OpenAI client_secrets payload plus a `model` field so the client
+// SDP-handshakes against the same model the server requested. Flip
+// REALTIME_MODEL in env to revert to gpt-realtime-mini for the legacy pipeline.
 
-app.post('/session', async (_req, res) => {
+const ALLOWED_REALTIME_MODELS = new Set(['gpt-realtime-2', 'gpt-realtime-mini', 'gpt-realtime']);
+
+app.post('/session', async (req, res) => {
   const openaiKey = keys.getKey('openai');
   if (!openaiKey) {
     return res.status(500).json({ error: 'OpenAI key not set. Add it under the key icon (OpenRouter does not support the realtime API).' });
   }
+  // Client passes the model it wants to SDP-handshake against (driven by the
+  // pipeline pill in the UI). Falls back to env, then sane default.
+  const requested = req.body?.model;
+  const model = (requested && ALLOWED_REALTIME_MODELS.has(requested))
+    ? requested
+    : REALTIME_MODEL;
   try {
     const upstream = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
       method: 'POST',
@@ -36,13 +47,244 @@ app.post('/session', async (_req, res) => {
         Authorization: `Bearer ${openaiKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ session: { type: 'realtime', model: REALTIME_MODEL } })
+      body: JSON.stringify({ session: { type: 'realtime', model } })
     });
     const text = await upstream.text();
-    res.status(upstream.status).type(upstream.headers.get('content-type') || 'application/json').send(text);
+    if (!upstream.ok) {
+      return res.status(upstream.status).type(upstream.headers.get('content-type') || 'application/json').send(text);
+    }
+    let body;
+    try { body = JSON.parse(text); } catch { body = { raw: text }; }
+    body.model = model;
+    res.json(body);
   } catch (err) {
     res.status(502).json({ error: String(err) });
   }
+});
+
+// ─── /voice/* — direct graph mutation endpoints for the realtime agent ───────
+// Used by realtime.v2.js (gpt-realtime-2 silent listener). The legacy pipeline
+// goes through /ingest → pharos-resolver instead. Per-session focus is tracked
+// here so the model can emit `parent_code: "@focus"` and have it resolve to
+// whatever the user has clicked into at request time.
+
+const sessionFocus = new Map(); // sessionId → focusedNodeId
+
+function getSessionFocusId(req) {
+  const sid = req.headers['x-session-id'] || 'default';
+  return sessionFocus.get(sid) || 'me';
+}
+
+function resolveParentCode(code, req) {
+  if (!code || code === 'me') return 'me';
+  if (code === '@focus') return getSessionFocusId(req);
+  const node = store.findByCode(code);
+  return node ? node.id : 'me';
+}
+
+function codeOfId(id) {
+  if (!id || id === 'me') return 'me';
+  return store.getNode(id)?.code || 'me';
+}
+
+function getAncestry(id) {
+  const out = [];
+  let cur = id;
+  let safety = 0;
+  while (cur && cur !== 'me' && safety++ < 200) {
+    const n = store.getNode(cur);
+    if (!n) break;
+    out.unshift({ code: n.code || null, label: n.canonical_name, id: cur });
+    cur = n.parent_id;
+  }
+  out.unshift({ code: 'me', label: 'me', id: 'me' });
+  return out;
+}
+
+function focusContext(req) {
+  const fid = getSessionFocusId(req);
+  if (fid === 'me') return { current_focus_code: 'me', current_focus_label: 'me' };
+  const node = store.getNode(fid);
+  return {
+    current_focus_code: node?.code || 'me',
+    current_focus_label: node?.canonical_name || 'me',
+  };
+}
+
+function voiceRandId() {
+  return Math.random().toString(36).slice(2, 8);
+}
+
+app.post('/voice/snapshot', (req, res) => {
+  const fid = getSessionFocusId(req);
+  const focusNode = fid === 'me' ? null : store.getNode(fid);
+  const nodes = store.getAllNodes()
+    .filter(n => n.code)
+    .map(n => ({
+      code: n.code,
+      label: n.canonical_name,
+      parent_code: codeOfId(n.parent_id),
+      kind: n.type || 'subject',
+    }));
+  res.json({
+    current_focus: focusNode
+      ? { code: focusNode.code || 'me', label: focusNode.canonical_name, id: focusNode.id }
+      : { code: 'me', label: 'me', id: 'me' },
+    nodes,
+  });
+});
+
+app.post('/voice/focus', (req, res) => {
+  const sid = req.headers['x-session-id'] || 'default';
+  const focusId = req.body?.focus_id || 'me';
+  if (focusId !== 'me' && !store.getNode(focusId)) {
+    sessionFocus.set(sid, 'me');
+  } else {
+    sessionFocus.set(sid, focusId);
+  }
+  res.json({ ok: true, ...focusContext(req) });
+});
+
+app.post('/voice/concept', (req, res) => {
+  const { name, parent_code, definition_core, kind } = req.body || {};
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed) return res.status(400).json({ error: 'name required' });
+  const parentId = resolveParentCode(parent_code, req);
+  const nodeId = `node-voice-${Date.now()}-${voiceRandId()}`;
+  store.addNode({
+    id: nodeId,
+    canonical_name: trimmed,
+    definition_core: definition_core || '',
+    type: kind || 'subject',
+    resonance_state: 'active',
+    confidence: 'seed',
+    top: '', bottom: '', front: '', back: '', left: '', right: '',
+    parent_id: parentId,
+  });
+  const code = store.assignCode(nodeId, parentId);
+  const persisted = { ...store.getNode(nodeId), code };
+  res.json({
+    ok: true,
+    code,
+    node: persisted,
+    parent_id: parentId,
+    parent_code: codeOfId(parentId),
+    ancestry: getAncestry(nodeId),
+    ...focusContext(req),
+  });
+});
+
+app.post('/voice/claim', (req, res) => {
+  const { subject_code, predicate, object_code, reasoning } = req.body || {};
+  const subjNode = store.findByCode(subject_code);
+  const objNode = store.findByCode(object_code);
+  if (!subjNode || !objNode) {
+    return res.status(400).json({ error: 'subject_code or object_code not found', ...focusContext(req) });
+  }
+  const claim = store.addClaim({
+    id: `claim-voice-${Date.now()}-${voiceRandId()}`,
+    predicate: (predicate || 'SUPPORTS').toUpperCase(),
+    subject_node: subjNode.id,
+    object_node: objNode.id,
+    confidence: 'medium',
+    reasoning: reasoning || 'voice agent inference',
+  });
+  res.json({ ok: true, claim, ...focusContext(req) });
+});
+
+app.post('/voice/move', (req, res) => {
+  const { target_code, new_parent_code } = req.body || {};
+  const targetNode = store.findByCode(target_code);
+  if (!targetNode) return res.status(400).json({ error: 'target_code not found' });
+  const newParentId = resolveParentCode(new_parent_code, req);
+  store.moveNode(targetNode.id, newParentId);
+  res.json({
+    ok: true,
+    target_id: targetNode.id,
+    target_code,
+    new_parent_id: newParentId,
+    new_parent_code: codeOfId(newParentId),
+    ...focusContext(req),
+  });
+});
+
+app.post('/voice/remove', (req, res) => {
+  const { target_code } = req.body || {};
+  const targetNode = store.findByCode(target_code);
+  if (!targetNode) return res.status(400).json({ error: 'target_code not found' });
+  const result = store.removeNode(targetNode.id);
+  res.json({
+    ok: true,
+    target_id: targetNode.id,
+    target_code,
+    removed: result.removed,
+    ...focusContext(req),
+  });
+});
+
+app.post('/voice/merge', (req, res) => {
+  const { canonical_code, duplicate_code } = req.body || {};
+  const canonical = store.findByCode(canonical_code);
+  if (!canonical) return res.status(400).json({ error: 'canonical_code not found' });
+  store.incrementExpression(canonical.id);
+  let removed = [];
+  if (duplicate_code) {
+    const dup = store.findByCode(duplicate_code);
+    if (dup && dup.id !== canonical.id) {
+      removed = store.removeNode(dup.id).removed;
+    }
+  }
+  res.json({
+    ok: true,
+    canonical_id: canonical.id,
+    canonical_code,
+    new_expression_count: store.getNode(canonical.id)?.expressionCount,
+    removed,
+    ...focusContext(req),
+  });
+});
+
+app.post('/voice/insight', (req, res) => {
+  const { text, related_codes } = req.body || {};
+  const trimmed = typeof text === 'string' ? text.trim() : '';
+  if (!trimmed) return res.status(400).json({ error: 'text required' });
+  const focusId = getSessionFocusId(req);
+  const nodeId = `node-insight-${Date.now()}-${voiceRandId()}`;
+  store.addNode({
+    id: nodeId,
+    canonical_name: trimmed.length > 60 ? trimmed.slice(0, 57) + '…' : trimmed,
+    definition_core: trimmed,
+    type: 'insight',
+    resonance_state: 'synthesized',
+    confidence: 'medium',
+    top: '', bottom: '', front: '', back: '', left: '', right: '',
+    parent_id: focusId,
+  });
+  const code = store.assignCode(nodeId, focusId);
+  const persisted = { ...store.getNode(nodeId), code };
+  const claims = [];
+  if (Array.isArray(related_codes)) {
+    for (const rc of related_codes) {
+      const target = store.findByCode(rc);
+      if (!target) continue;
+      claims.push(store.addClaim({
+        id: `claim-insight-${Date.now()}-${voiceRandId()}`,
+        predicate: 'SUPPORTS',
+        subject_node: nodeId,
+        object_node: target.id,
+        confidence: 'medium',
+        reasoning: 'insight derived from these concepts',
+      }));
+    }
+  }
+  res.json({
+    ok: true,
+    code,
+    node: persisted,
+    claims,
+    parent_code: codeOfId(focusId),
+    ...focusContext(req),
+  });
 });
 
 // ─── /ingest — PHAROS CubeCodex identity resolution ──────────────────────────
