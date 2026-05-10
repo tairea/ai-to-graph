@@ -566,6 +566,109 @@ html.has-username #welcome-overlay { display: none !important; }
   50% { border-color: rgba(120, 160, 255, 0.4); }
 }
 
+/* === ship controls (bottom-left, matches right-edge buttons) === */
+#ship-controls {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 25;
+  display: flex;
+  flex-direction: column-reverse; /* ship-btn anchored at bottom; extras stack upward */
+  gap: 10px;
+  pointer-events: none; /* children re-enable */
+}
+
+#ship-controls > button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(120, 160, 255, 0.1);
+  background: rgba(10, 16, 30, 0.5);
+  backdrop-filter: blur(10px);
+  color: rgba(140, 170, 220, 0.55);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.22s ease;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: auto;
+  padding: 0;
+}
+
+#ship-controls > button svg {
+  width: 16px;
+  height: 16px;
+}
+
+#ship-controls > button:hover {
+  color: rgba(180, 210, 255, 0.95);
+  border-color: rgba(120, 160, 255, 0.32);
+  background: rgba(20, 30, 55, 0.75);
+  transform: scale(1.06);
+}
+
+#ship-controls > button:active { transform: scale(0.94); }
+
+#ship-btn[data-active="true"] {
+  color: rgba(220, 235, 255, 1);
+  border-color: rgba(120, 180, 255, 0.55);
+  background: rgba(40, 70, 130, 0.55);
+  box-shadow: 0 0 14px rgba(80, 140, 255, 0.18);
+}
+
+/* swap steering wheel ↔ X based on data-active */
+#ship-btn .ship-icon-stop { display: none; }
+#ship-btn[data-active="true"] .ship-icon-default { display: none; }
+#ship-btn[data-active="true"] .ship-icon-stop { display: block; }
+
+
+/* When the ship is flying, the cursor doubles as the steering reticle. */
+body.is-ship-mode { cursor: crosshair; }
+body.is-ship-mode #graph { cursor: crosshair; }
+
+#ship-help {
+  position: fixed;
+  left: 18px;
+  bottom: 60px;
+  z-index: 26;
+  padding: 11px 13px;
+  background: rgba(10, 16, 30, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(120, 160, 255, 0.18);
+  border-radius: 10px;
+  color: rgba(220, 235, 255, 0.88);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  line-height: 1.7;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.35s ease, transform 0.35s ease;
+  pointer-events: none;
+  user-select: none;
+}
+
+#ship-help.is-visible { opacity: 1; transform: translateY(0); }
+#ship-help[hidden] { display: none; }
+
+.ship-help-row { display: flex; align-items: center; gap: 8px; }
+
+.ship-help-row kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(120, 160, 255, 0.14);
+  border: 1px solid rgba(120, 160, 255, 0.28);
+  color: rgba(200, 225, 255, 0.95);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 18px;
+  text-align: center;
+}
+
 /* === bottom-right edge controls (share above info) === */
 #edge-controls {
   position: fixed;

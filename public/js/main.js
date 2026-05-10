@@ -1017,6 +1017,49 @@ function showShareSpecificModal(node) {
   overlay.querySelector('#share-did-input').focus();
 }
 
+// ─── spaceship mode (steering wheel button) ─────────────────────────────────
+
+const shipBtn = document.getElementById('ship-btn');
+const shipHelp = document.getElementById('ship-help');
+let shipHelpTimer = null;
+
+function showShipHelp() {
+  if (!shipHelp) return;
+  shipHelp.hidden = false;
+  requestAnimationFrame(() => shipHelp.classList.add('is-visible'));
+  clearTimeout(shipHelpTimer);
+  shipHelpTimer = setTimeout(hideShipHelp, 5000);
+}
+
+function hideShipHelp() {
+  if (!shipHelp) return;
+  clearTimeout(shipHelpTimer);
+  shipHelp.classList.remove('is-visible');
+  setTimeout(() => { shipHelp.hidden = true; }, 400);
+}
+
+shipBtn?.addEventListener('click', async () => {
+  if (graph.isSpaceshipMode()) {
+    graph.stopSpaceshipMode();
+    return;
+  }
+  const ok = await graph.startSpaceshipMode({
+    onExit: () => {
+      shipBtn.dataset.active = 'false';
+      shipBtn.setAttribute('aria-label', 'Enter spaceship mode');
+      shipBtn.title = 'Fly the graph as a spaceship';
+      hideShipHelp();
+    },
+  });
+  if (ok) {
+    shipBtn.dataset.active = 'true';
+    shipBtn.setAttribute('aria-label', 'Exit spaceship mode');
+    shipBtn.title = 'Stop flying';
+    showShipHelp();
+  }
+});
+
+
 // ─── manual node add (click empty space) ────────────────────────────────────
 
 const addNodePopover = document.getElementById('add-node-popover');

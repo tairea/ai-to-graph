@@ -258,6 +258,32 @@
       </ul>
     </div>
 
+    <div id="ship-controls">
+      <button id="ship-btn" aria-label="Enter spaceship mode" title="Fly the graph as a spaceship">
+        <svg class="ship-icon-default" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <circle cx="12" cy="12" r="2.4"/>
+          <line x1="12" y1="3" x2="12" y2="9.6"/>
+          <line x1="3" y1="12" x2="9.6" y2="12"/>
+          <line x1="14.4" y1="12" x2="21" y2="12"/>
+          <line x1="12" y1="14.4" x2="12" y2="21"/>
+        </svg>
+        <svg class="ship-icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="6" y1="6" x2="18" y2="18"/>
+          <line x1="18" y1="6" x2="6" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div id="ship-help" hidden>
+      <div class="ship-help-row"><kbd>Mouse</kbd> steer</div>
+      <div class="ship-help-row"><kbd>W</kbd>/<kbd>S</kbd> accelerate / reverse</div>
+      <div class="ship-help-row"><kbd>Space</kbd> boost</div>
+      <div class="ship-help-row"><kbd>1</kbd> cycle ship</div>
+      <div class="ship-help-row"><kbd>2</kbd> cycle thruster colour</div>
+      <div class="ship-help-row"><kbd>Esc</kbd> exit</div>
+    </div>
+
     <div id="toast" hidden></div>
 
     <div id="add-node-popover" hidden>

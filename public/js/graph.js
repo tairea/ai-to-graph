@@ -1,5 +1,7 @@
 import ForceGraph3D from '3d-force-graph';
 import * as THREE from 'three';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import { getAvatar } from './avatar.js';
 import { getUserName } from './user.js';
 
@@ -273,15 +275,15 @@ const FOLDER_ICON_BY_NAME = {
   helpers: 'folder-helper',
   helper: 'folder-helper',
   hooks: 'folder-hook',
-  store: 'folder-redux',
-  stores: 'folder-redux',
+  store: 'folder-mappings',
+  stores: 'folder-mappings',
   api: 'folder-api',
   apis: 'folder-api',
   tests: 'folder-test',
   test: 'folder-test',
   __tests__: 'folder-test',
   spec: 'folder-test',
-  e2e: 'folder-e2e',
+  e2e: 'folder-test',
   docs: 'folder-docs',
   doc: 'folder-docs',
   config: 'folder-config',
@@ -338,10 +340,17 @@ function getIconTexture(iconName) {
   };
   img.onerror = () => {
     if (iconName === 'file' || iconName === 'folder') return;
+    // Draw the generic fallback into THIS texture's own canvas so any
+    // material already referencing it picks up the change.
     const fallback = iconName.startsWith('folder') ? 'folder' : 'file';
-    iconTextureCache.delete(iconName);
-    const fbTex = getIconTexture(fallback);
-    iconTextureCache.set(iconName, fbTex);
+    const fbImg = new Image();
+    fbImg.crossOrigin = 'anonymous';
+    fbImg.onload = () => {
+      ctx.clearRect(0, 0, size, size);
+      ctx.drawImage(fbImg, 0, 0, size, size);
+      texture.needsUpdate = true;
+    };
+    fbImg.src = `${ICON_BASE}/${fallback}.svg`;
   };
   img.src = `${ICON_BASE}/${iconName}.svg`;
   return texture;
@@ -436,10 +445,13 @@ function makeTextSprite({ label, code = '' }) {
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: false });
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, depthTest: true });
   const sprite = new THREE.Sprite(material);
   sprite.scale.set(w * LABEL_SCALE, h * LABEL_SCALE, 1);
-  sprite.renderOrder = 999;
+  // Render after opaque scene so transparent edges blend correctly, but with
+  // depthTest: true the ship (and other opaque geometry between camera and
+  // label) correctly occludes the label.
+  sprite.renderOrder = 1;
   return sprite;
 }
 
@@ -707,8 +719,12 @@ export function init(container, tip) {
       event.preventDefault?.();
       nodeRightClickCb(node, event);
     })
-    .onNodeClick(node => focusOnNode(node))
+    .onNodeClick(node => {
+      if (shipState.active) return;
+      focusOnNode(node);
+    })
     .onBackgroundClick(event => {
+      if (shipState.active) return;
       if (backgroundClickCb && event) backgroundClickCb(event);
     })
     .linkDirectionalParticles(2)
@@ -1088,4 +1104,479 @@ export function getNeighbors(id) {
   }
   children.sort((a, b) => (a.code || '').localeCompare(b.code || ''));
   return { parent, firstChild: children[0] || null };
+}
+
+// ─── Spaceship mode (mini-game) ──────────────────────────────────────────────
+// Loads a low-poly spaceship (Quaternius CC0 OBJ) and lets the user fly it
+// around the graph. Mouse steers; W/S accelerate/reverse; Space boosts; the
+// ship banks/rolls into turns to feel alive.
+
+const shipState = {
+  active: false,
+  ship: null,
+  thrusters: null,
+  trails: null,
+  trailsInitialized: false,
+  raf: null,
+  keys: null,
+  keyDown: null,
+  keyUp: null,
+  mouseMove: null,
+  onExit: null,
+  mouseNX: 0,
+  mouseNY: 0,
+  velocity: null,
+  yaw: 0,
+  pitch: 0,
+  roll: 0,
+};
+
+const TRAIL_POINTS = 960;     // ~16 seconds of trail at 60fps
+
+const SHIPS = ['Spaceship', 'Spaceship2', 'Spaceship3', 'Spaceship4', 'Spaceship5'];
+let currentShipIdx = 2;       // default = Spaceship3
+
+const TRAIL_COLORS = [
+  0x88d4ff, // electric cyan
+  0xff44dd, // hot pink magenta
+  0x44ff88, // acid lime
+  0xffaa33, // neon orange
+  0xc488ff, // ultraviolet
+];
+let currentColorIdx = 0;
+
+function bakeTrailColors(colors, hex) {
+  const c = new THREE.Color(hex);
+  for (let i = 0; i < TRAIL_POINTS; i++) {
+    const t = 1 - (i / (TRAIL_POINTS - 1));
+    const a = t * t; // squared falloff: bright near head, soft long tail
+    colors[i * 3]     = c.r * a;
+    colors[i * 3 + 1] = c.g * a;
+    colors[i * 3 + 2] = c.b * a;
+  }
+}
+
+function makeTrailLine(colorHex) {
+  const geom = new THREE.BufferGeometry();
+  const positions = new Float32Array(TRAIL_POINTS * 3);
+  const colors = new Float32Array(TRAIL_POINTS * 3);
+  bakeTrailColors(colors, colorHex);
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
+
+  // Tell three the buffer is going to change every frame so it doesn't try to
+  // optimise it for static use.
+  geom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+
+  const mat = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    linewidth: 2,
+  });
+  const line = new THREE.Line(geom, mat);
+  // The bounding sphere is computed once at construction time and never moves
+  // with our shifting vertices. Disable frustum culling so the line is always
+  // drawn even when the ship has flown far from the scene origin.
+  line.frustumCulled = false;
+  return line;
+}
+
+function fillTrailWith(trail, pos) {
+  const arr = trail.geometry.attributes.position.array;
+  for (let i = 0; i < TRAIL_POINTS; i++) {
+    arr[i * 3]     = pos.x;
+    arr[i * 3 + 1] = pos.y;
+    arr[i * 3 + 2] = pos.z;
+  }
+  trail.geometry.attributes.position.needsUpdate = true;
+}
+
+function pushTrailPoint(trail, pos) {
+  const arr = trail.geometry.attributes.position.array;
+  // Shift everything one slot back (oldest gets dropped).
+  for (let i = TRAIL_POINTS - 1; i > 0; i--) {
+    arr[i * 3]     = arr[(i - 1) * 3];
+    arr[i * 3 + 1] = arr[(i - 1) * 3 + 1];
+    arr[i * 3 + 2] = arr[(i - 1) * 3 + 2];
+  }
+  arr[0] = pos.x;
+  arr[1] = pos.y;
+  arr[2] = pos.z;
+  trail.geometry.attributes.position.needsUpdate = true;
+}
+
+// One promise per ship-name → resolves to the normalised OBJ (centered/scaled).
+// We hand a fresh wrapping Group on every call so callers can transform it
+// freely; the shared OBJ child is reparented automatically when added.
+const _shipObjPromises = {};
+function loadShipObj(name) {
+  if (!_shipObjPromises[name]) {
+    _shipObjPromises[name] = new Promise((resolve, reject) => {
+      const mtlLoader = new MTLLoader().setPath('models/');
+      mtlLoader.load(`${name}.mtl`, (mtl) => {
+        mtl.preload();
+        const objLoader = new OBJLoader().setMaterials(mtl).setPath('models/');
+        objLoader.load(`${name}.obj`, (obj) => {
+          const box = new THREE.Box3().setFromObject(obj);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z) || 1;
+          const targetSize = 5;
+          const scale = targetSize / maxDim;
+          obj.position.sub(center);
+          obj.scale.setScalar(scale);
+          resolve(obj);
+        }, undefined, reject);
+      }, undefined, reject);
+    });
+  }
+  return _shipObjPromises[name].then(obj => {
+    const wrap = new THREE.Group();
+    wrap.add(obj); // reparents from any previous wrap
+    return wrap;
+  });
+}
+
+function makeThrusterFlare() {
+  // Two small additive sprites attached behind the ship, scaled by velocity.
+  const group = new THREE.Group();
+  const tex = makeFlareTexture();
+  const make = () => {
+    const mat = new THREE.SpriteMaterial({
+      map: tex,
+      color: 0x88c8ff,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const sp = new THREE.Sprite(mat);
+    sp.scale.set(2, 2, 1);
+    return sp;
+  };
+  const a = make();
+  const b = make();
+  a.position.set(-0.9, -0.5, -3.0);
+  b.position.set(0.9, -0.5, -3.0);
+  group.add(a, b);
+  group.userData.sprites = [a, b];
+  return group;
+}
+
+let _flareTex = null;
+function makeFlareTexture() {
+  if (_flareTex) return _flareTex;
+  const size = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.25, 'rgba(180,220,255,0.85)');
+  g.addColorStop(0.6, 'rgba(80,160,255,0.35)');
+  g.addColorStop(1, 'rgba(40,90,200,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(size/2, size/2, size/2, 0, Math.PI * 2);
+  ctx.fill();
+  _flareTex = new THREE.CanvasTexture(c);
+  _flareTex.colorSpace = THREE.SRGBColorSpace;
+  return _flareTex;
+}
+
+const SHIP_KEYS = {
+  forward: ['w', 'arrowup'],
+  back:    ['s', 'arrowdown'],
+  boost:   [' '],
+};
+
+function shipPressed(keys, action) {
+  for (const k of SHIP_KEYS[action]) if (keys.has(k)) return true;
+  return false;
+}
+
+function withDeadzone(v, dz) {
+  const a = Math.abs(v);
+  if (a < dz) return 0;
+  return Math.sign(v) * (a - dz) / (1 - dz);
+}
+
+export async function startSpaceshipMode(opts = {}) {
+  if (shipState.active) return false;
+  const scene = graph.scene?.();
+  const camera = graph.camera?.();
+  const controls = graph.controls?.();
+  if (!scene || !camera) return false;
+
+  let ship;
+  try {
+    ship = await loadShipObj(SHIPS[currentShipIdx]);
+  } catch (err) {
+    console.warn('[ship] failed to load model:', err);
+    return false;
+  }
+  if (shipState.active) return false; // re-entered while loading
+
+  shipState.active = true;
+  shipState.onExit = opts.onExit || null;
+  if (controls) controls.enabled = false;
+
+  // Spawn at current view target, oriented along the camera's view direction.
+  const spawnPos = controls?.target ? controls.target.clone() : new THREE.Vector3();
+  ship.position.copy(spawnPos);
+  const dx = spawnPos.x - camera.position.x;
+  const dz = spawnPos.z - camera.position.z;
+  shipState.yaw = Math.atan2(dx, dz);
+  shipState.pitch = 0;
+  shipState.roll = 0;
+  ship.rotation.order = 'YXZ';
+  ship.rotation.set(0, shipState.yaw, 0, 'YXZ');
+  scene.add(ship);
+  shipState.ship = ship;
+
+  // Add thruster flares behind the ship.
+  const thrusters = makeThrusterFlare();
+  ship.add(thrusters);
+  shipState.thrusters = thrusters;
+
+  // Two world-space trails — one per thruster.
+  const initialColor = TRAIL_COLORS[currentColorIdx];
+  const trailL = makeTrailLine(initialColor);
+  const trailR = makeTrailLine(initialColor);
+  scene.add(trailL);
+  scene.add(trailR);
+  shipState.trails = [trailL, trailR];
+  shipState.trailsInitialized = false;
+
+  // Make sure the flare sprites match the active color too.
+  applyShipColor(currentColorIdx);
+
+  shipState.velocity = new THREE.Vector3();
+  shipState.mouseNX = 0;
+  shipState.mouseNY = 0;
+
+  const keys = new Set();
+  shipState.keys = keys;
+
+  shipState.keyDown = (e) => {
+    if (e.key === 'Escape') { stopSpaceshipMode(); return; }
+    if (e.key === '1') { cycleShip(); return; }
+    if (e.key === '2') { cycleShipColor(); return; }
+    const k = e.key.toLowerCase();
+    keys.add(k);
+    if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+      e.preventDefault();
+    }
+  };
+  shipState.keyUp = (e) => keys.delete(e.key.toLowerCase());
+  shipState.mouseMove = (e) => {
+    shipState.mouseNX = (e.clientX / window.innerWidth) * 2 - 1;
+    shipState.mouseNY = -((e.clientY / window.innerHeight) * 2 - 1);
+  };
+  window.addEventListener('keydown', shipState.keyDown);
+  window.addEventListener('keyup', shipState.keyUp);
+  window.addEventListener('mousemove', shipState.mouseMove);
+  document.body.classList.add('is-ship-mode');
+
+  // Movement / damping constants
+  const ACCEL = 0.06;
+  const REVERSE = 0.045;
+  const MAX_SPEED = 1.6;
+  const BOOST_MAX = 3.4;
+  const FRICTION = 0.97;
+  const YAW_RATE = 0.022;
+  const PITCH_RATE = 0.018;
+  const PITCH_LIMIT = 1.0;
+
+  const tick = () => {
+    if (!shipState.active) return;
+    // Re-read each frame so cycleShip()'s swap is picked up automatically;
+    // otherwise the tick would keep flying the orphaned old ship.
+    const ship = shipState.ship;
+    if (!ship) {
+      shipState.raf = requestAnimationFrame(tick);
+      return;
+    }
+
+    // --- mouse steering ---
+    const yawIn = withDeadzone(shipState.mouseNX, 0.06);
+    const pitchIn = withDeadzone(shipState.mouseNY, 0.06);
+    shipState.yaw -= yawIn * YAW_RATE;
+    // Mouse up (mouseNY > 0) ⇒ nose tips up. With YXZ Euler on a ship facing
+    // +Z, that's a NEGATIVE pitch around X.
+    shipState.pitch -= pitchIn * PITCH_RATE;
+    shipState.pitch = THREE.MathUtils.clamp(shipState.pitch, -PITCH_LIMIT, PITCH_LIMIT);
+    // Bank into turns + slight pitch-aware lean (mouse-right banks right)
+    const targetRoll = yawIn * 0.7 - pitchIn * 0.05;
+    shipState.roll += (targetRoll - shipState.roll) * 0.08;
+    ship.rotation.set(shipState.pitch, shipState.yaw, shipState.roll, 'YXZ');
+
+    // --- thrust ---
+    const fwd = new THREE.Vector3(0, 0, 1).applyEuler(ship.rotation);
+    const boost = shipPressed(keys, 'boost');
+    const accel = shipPressed(keys, 'forward');
+    const reverse = shipPressed(keys, 'back');
+    if (accel)   shipState.velocity.add(fwd.clone().multiplyScalar(ACCEL * (boost ? 2 : 1)));
+    if (reverse) shipState.velocity.add(fwd.clone().multiplyScalar(-REVERSE));
+
+    // Cap speed (different cap when boosting)
+    const cap = boost ? BOOST_MAX : MAX_SPEED;
+    if (shipState.velocity.length() > cap) {
+      shipState.velocity.setLength(cap);
+    }
+    // Friction so the ship coasts to a stop when no thrust
+    shipState.velocity.multiplyScalar(FRICTION);
+    ship.position.add(shipState.velocity);
+
+    // Thruster flare brightness scales with speed (and pops during boost).
+    const speed = shipState.velocity.length();
+    const flareScale = Math.min(1, speed / cap) * (boost ? 1.6 : 1.0);
+    const sprites = shipState.thrusters?.userData.sprites;
+    if (sprites) {
+      for (const s of sprites) {
+        s.material.opacity = 0.25 + flareScale * 0.75;
+        const jitter = 0.85 + Math.random() * 0.3;
+        const w = 1.5 + flareScale * 1.4;
+        const l = 1.5 + flareScale * (boost ? 5 : 3) * jitter;
+        s.scale.set(w, l, 1);
+      }
+    }
+
+    // Camera follows from behind + slightly above
+    const camOffset = new THREE.Vector3(0, 5, -22).applyEuler(ship.rotation);
+    const targetCamPos = ship.position.clone().add(camOffset);
+    camera.position.lerp(targetCamPos, 0.1);
+    camera.lookAt(ship.position);
+
+    // Trails — sample the two thruster sprites' world positions and push them
+    // onto each trail. Shift one slot per frame, oldest fades to zero (which
+    // is invisible under additive blending), newest is at the ship.
+    if (shipState.trails && sprites) {
+      ship.updateMatrixWorld();
+      const wL = new THREE.Vector3();
+      const wR = new THREE.Vector3();
+      sprites[0].getWorldPosition(wL);
+      sprites[1].getWorldPosition(wR);
+      if (!shipState.trailsInitialized) {
+        fillTrailWith(shipState.trails[0], wL);
+        fillTrailWith(shipState.trails[1], wR);
+        shipState.trailsInitialized = true;
+      } else {
+        pushTrailPoint(shipState.trails[0], wL);
+        pushTrailPoint(shipState.trails[1], wR);
+      }
+    }
+
+    shipState.raf = requestAnimationFrame(tick);
+  };
+  tick();
+
+  return true;
+}
+
+function applyShipColor(idx) {
+  const len = TRAIL_COLORS.length;
+  currentColorIdx = ((idx % len) + len) % len;
+  const hex = TRAIL_COLORS[currentColorIdx];
+  const c = new THREE.Color(hex);
+  // Flare sprites
+  const sprites = shipState.thrusters?.userData.sprites;
+  if (sprites) {
+    for (const sp of sprites) {
+      sp.material.color.copy(c);
+      sp.material.needsUpdate = true;
+    }
+  }
+  // Trail color buffers — re-bake the gradient on the fly.
+  if (shipState.trails) {
+    for (const trail of shipState.trails) {
+      const arr = trail.geometry.attributes.color.array;
+      bakeTrailColors(arr, hex);
+      trail.geometry.attributes.color.needsUpdate = true;
+    }
+  }
+}
+
+export function cycleShipColor() {
+  if (!shipState.active) return;
+  applyShipColor(currentColorIdx + 1);
+}
+
+export async function cycleShip() {
+  if (!shipState.active) return;
+  const scene = graph.scene?.();
+  if (!scene) return;
+  currentShipIdx = (currentShipIdx + 1) % SHIPS.length;
+  let newShip;
+  try {
+    newShip = await loadShipObj(SHIPS[currentShipIdx]);
+  } catch (err) {
+    console.warn('[ship] failed to load alternate model:', err);
+    return;
+  }
+  if (!shipState.active) return;
+  const oldShip = shipState.ship;
+  if (!oldShip) return;
+  // Inherit transform from the old ship so the swap is seamless.
+  newShip.position.copy(oldShip.position);
+  newShip.rotation.copy(oldShip.rotation);
+  newShip.rotation.order = 'YXZ';
+  // Move thrusters from old ship to new ship.
+  if (shipState.thrusters) {
+    oldShip.remove(shipState.thrusters);
+    newShip.add(shipState.thrusters);
+  }
+  scene.remove(oldShip);
+  scene.add(newShip);
+  shipState.ship = newShip;
+}
+
+export function stopSpaceshipMode() {
+  if (!shipState.active) return;
+  shipState.active = false;
+
+  const scene = graph.scene?.();
+  const controls = graph.controls?.();
+
+  if (shipState.raf) cancelAnimationFrame(shipState.raf);
+  shipState.raf = null;
+
+  if (shipState.keyDown) window.removeEventListener('keydown', shipState.keyDown);
+  if (shipState.keyUp)   window.removeEventListener('keyup', shipState.keyUp);
+  if (shipState.mouseMove) window.removeEventListener('mousemove', shipState.mouseMove);
+  shipState.keyDown = shipState.keyUp = shipState.mouseMove = null;
+
+  const lastPos = shipState.ship?.position.clone();
+  if (shipState.ship && scene) scene.remove(shipState.ship);
+  shipState.ship = null;
+  shipState.thrusters = null;
+  shipState.keys = null;
+  shipState.velocity = null;
+
+  if (shipState.trails && scene) {
+    for (const trail of shipState.trails) {
+      scene.remove(trail);
+      trail.geometry.dispose();
+      trail.material.dispose();
+    }
+  }
+  shipState.trails = null;
+  shipState.trailsInitialized = false;
+  document.body.classList.remove('is-ship-mode');
+
+  if (controls) {
+    if (lastPos) controls.target.copy(lastPos);
+    controls.enabled = true;
+    try { controls.update(); } catch {}
+  }
+
+  const onExit = shipState.onExit;
+  shipState.onExit = null;
+  if (onExit) onExit();
+}
+
+export function isSpaceshipMode() {
+  return shipState.active;
 }
