@@ -1,5 +1,5 @@
 {
-  "name": "voice-to-graph",
+  "name": "graph-space",
   "version": "0.1.0",
   "description": "Voice conversation → live PHAROS knowledge graph with CubeCodex identity resolution",
   "type": "module",

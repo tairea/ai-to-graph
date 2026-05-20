@@ -1,4 +1,4 @@
-# voice-to-graph
+# graph-space
 
 A collaborative graph workspace prototype. Speak, type, drop a markdown
 file, paste a GitHub repo, or click an empty patch of canvas — every
@@ -8,6 +8,9 @@ your avatar.
 Offline-first. Each instance runs locally and persists to disk. Subtrees
 sync peer-to-peer over **Gun.js** — publicly, end-to-end encrypted to a
 specific recipient, or linked to your DID for anyone who has added you.
+
+![graph-space screenshot](screenshot-2026-05-09_17-07-08.png)
+![graph-space screenshot](screenshot-2026-05-09_17-51-41.png)
 
 ---
 
@@ -197,8 +200,8 @@ RESOLVE_MODEL=claude-sonnet-4-6      # optional override
 Requires Node ≥18 and `git` on PATH (for repo ingest).
 
 ```bash
-git clone https://github.com/tairea/voice-to-graph.git
-cd voice-to-graph
+git clone https://github.com/tairea/graph-space.git
+cd graph-space
 npm install
 cp .env.example .env  # optional — keys can also be entered in the UI
 npm start
@@ -221,10 +224,10 @@ The live instance runs under PM2:
 
 ```bash
 pm2 list
-# voice-to-graph   ← node server.js              (port 3002)
-# gun-relay        ← deploy/gun-relay/relay.js   (port 8765)
+# graph-space   ← node server.js              (port 3002)
+# gun-relay     ← deploy/gun-relay/relay.js   (port 8765)
 ```
 
-Front-ended by nginx at https://experiments.sunriselabs.io/voice-to-graph/
+Front-ended by nginx at https://experiments.sunriselabs.io/graph-space/
 with `proxy_buffering off` for the SSE stream. Restart with
-`pm2 restart voice-to-graph --update-env` after changing `.env`.
+`pm2 restart graph-space --update-env` after changing `.env`.

@@ -2,7 +2,7 @@
 
 Two services:
 
-- **pharos** — voice-to-graph backend (port 3002)
+- **pharos** — graph-space backend (port 3002)
 - **gun-relay** — Gun WebSocket relay for P2P sync between users (port 8765)
 
 ## Local stack (no VPS yet)
@@ -21,7 +21,7 @@ PHAROS at http://localhost:3002, relay health at http://localhost:8765/health.
 cd deploy/gun-relay
 npm install
 node relay.js
-# then restart the PM2 voice-to-graph with GUN_RELAY_URL=http://localhost:8765/gun
+# then restart the PM2 graph-space with GUN_RELAY_URL=http://localhost:8765/gun
 ```
 
 ## VPS
@@ -41,5 +41,5 @@ Verify: `curl http://your-vps:8765/health` → `{"status":"ok"}`.
 Then on each user's machine, point their PHAROS at the VPS:
 
 ```bash
-GUN_RELAY_URL=http://your-vps:8765/gun pm2 restart voice-to-graph
+GUN_RELAY_URL=http://your-vps:8765/gun pm2 restart graph-space
 ```
