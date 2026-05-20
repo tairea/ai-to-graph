@@ -9,8 +9,8 @@ Offline-first. Each instance runs locally and persists to disk. Subtrees
 sync peer-to-peer over **Gun.js** — publicly, end-to-end encrypted to a
 specific recipient, or linked to your DID for anyone who has added you.
 
-![graph-space screenshot](screenshot-2026-05-09_17-07-08.png)
 ![graph-space screenshot](screenshot-2026-05-09_17-51-41.png)
+![graph-space screenshot](screenshot-2026-05-09_17-07-08.png)
 
 ---
 
